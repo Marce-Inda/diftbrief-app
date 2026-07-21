@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "name": "PostFileSave Quality & Security Check",
+  "description": "Valida automáticamente que el código guardado no contenga el tipo 'any', bloques catch vacíos ni claves de API expuestas.",
+  "when": {
+    "type": "postToolUse",
+    "toolTypes": ["write"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Verifica que el archivo guardado cumpla con .kiro/steering/coding-standards.md. Asegura que no tenga tipos 'any', bloques catch vacíos ni API keys expuestas en texto plano. Si encuentras problemas, reporta qué archivos tienen problemas y qué líneas, pero NO bloques la ejecución."
+  }
+}

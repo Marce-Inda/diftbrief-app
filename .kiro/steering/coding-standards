@@ -1,0 +1,23 @@
+# Coding Standards - DriftBrief
+## Reglas Estrictas de Código (TypeScript & React)
+### 1. TypeScript Estricto
+- **Prohibido `any`:** Todos los tipos deben estar explícitamente definidos en `src/types/index.ts` o inferidos de forma segura. Usar `unknown` o genéricos si el tipo no está cerrado.
+- **Modo Estricto:** `strict: true` activado en `tsconfig.json`.
+### 2. Documentación JSDoc
+- Toda función utilitaria o servicio exportado debe contar con documentación JSDoc explicativa:
+  ```typescript
+  /**
+   * Genera el delta entre dos snapshots de un incidente.
+   * @param previousSnapshot Snapshot anterior (estado base).
+   * @param currentSnapshot Snapshot actual (nuevo estado).
+   * @returns Objeto Drift estructurado.
+   */
+  ```
+### 3. Longitud y Limpieza de Funciones
+- Funciones cortas y enfocadas: **Máximo 40 líneas por función**. Si la función excede este límite, debe refactorizarse en sub-funciones puras.
+- **Cero bloques `catch` vacíos:** Todo error en un bloque `catch` debe ser manejado, registrado limpiamente o devuelto a una capa de *fallback*.
+### 4. Convención de Nombres de Archivos
+- Componentes React (`.tsx`): `PascalCase` (ej. `IncidentCard.tsx`, `RoleSwitcher.tsx`).
+- Servicios y utilidades (`.ts`): `kebab-case` o `camelCase` (ej. `drift-comparator.ts`, `agent-service.ts`).
+- Archivos de estilo (`.css`): `kebab-case` (ej. `tokens.css`, `drift-banner.css`).
+

@@ -1,0 +1,7 @@
+{
+  "name": "driftbrief-agent",
+  "displayName": "DriftBrief Incident Agent",
+  "description": "Specialized Kiro agent skill for cybersecurity incident drift detection and SOC/CISO briefings.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

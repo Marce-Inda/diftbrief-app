@@ -1,0 +1,7 @@
+{
+  "name": "driftbrief-reviewer",
+  "displayName": "DriftBrief Code Reviewer",
+  "description": "Specialized Kiro agent skill for auditing code quality, EARS criteria, and security safeguards.",
+  "version": "1.0.0",
+  "main": "SKILL.md"
+}

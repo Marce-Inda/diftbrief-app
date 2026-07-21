@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "name": "Snapshot JSON Schema Validator",
+  "description": "Valida automáticamente la estructura estricta de src/data/snapshots.json al guardar.",
+  "when": {
+    "type": "postToolUse",
+    "toolTypes": ["write"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Valida que el archivo guardado sea src/data/snapshots.json y cumpla con todos los campos obligatorios del esquema Snapshot en .agents/AGENTS.md. Si encuentras problemas, reporta qué campos faltan o son inválidos, pero NO bloques la ejecución."
+  }
+}
