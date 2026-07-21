@@ -1,0 +1,259 @@
+[
+  {
+    "id": "A",
+    "title": "Anomalía Técnica de Integridad",
+    "timestamp": "2024-11-05T02:30:00Z",
+    "severity": "medium",
+    "summary": "Se detectaron inconsistencias en registros de la base de datos del padrón electoral. Posible corrupción de datos o acceso no autorizado. Investigación inicial en curso.",
+    "facts": [
+      {
+        "id": "A-F1",
+        "description": "Detectadas 847 modificaciones anómalas en registros del padrón electoral entre 01:00-02:15 UTC",
+        "confidence": "confirmed",
+        "category": "data-integrity"
+      },
+      {
+        "id": "A-F2",
+        "description": "Las modificaciones provienen de una cuenta de servicio con privilegios elevados (svc-padron-sync)",
+        "confidence": "confirmed",
+        "category": "access-control"
+      },
+      {
+        "id": "A-F3",
+        "description": "No se encontraron registros de autenticación MFA para la cuenta de servicio comprometida",
+        "confidence": "confirmed",
+        "category": "authentication"
+      }
+    ],
+    "hypotheses": [
+      {
+        "id": "A-H1",
+        "description": "Error en el proceso de sincronización automática del padrón (fallo técnico)",
+        "confidence": "probable"
+      },
+      {
+        "id": "A-H2",
+        "description": "Acceso no autorizado mediante credenciales robadas de la cuenta de servicio",
+        "confidence": "unconfirmed"
+      }
+    ],
+    "iocs": [
+      {
+        "type": "ip",
+        "value": "185.220.101.34",
+        "description": "IP origen de conexiones anómalas al servidor de base de datos"
+      },
+      {
+        "type": "account",
+        "value": "svc-padron-sync",
+        "description": "Cuenta de servicio con actividad fuera de horario programado"
+      }
+    ],
+    "recommendedActions": [
+      {
+        "description": "Aislar la cuenta svc-padron-sync y rotar credenciales inmediatamente",
+        "priority": 1,
+        "role": "soc"
+      },
+      {
+        "description": "Activar monitoreo forense en el servidor de base de datos del padrón",
+        "priority": 2,
+        "role": "soc"
+      },
+      {
+        "description": "Evaluar si la anomalía requiere notificación al comité de seguridad electoral",
+        "priority": 1,
+        "role": "ciso"
+      }
+    ]
+  },
+  {
+    "id": "B",
+    "title": "Compromiso Verificado y Exfiltración Activa",
+    "timestamp": "2024-11-05T08:45:00Z",
+    "severity": "critical",
+    "summary": "Confirmada presencia de malware X-Agent (APT28/Fancy Bear) en infraestructura electoral. Evidencia de exfiltración de datos del padrón hacia servidores C2 externos. La hipótesis de fallo técnico queda descartada.",
+    "facts": [
+      {
+        "id": "B-F1",
+        "description": "Identificado malware X-Agent (hash SHA-256: 3a7b9c...) en servidor db-padron-primary",
+        "confidence": "confirmed",
+        "category": "malware"
+      },
+      {
+        "id": "B-F2",
+        "description": "Detectada exfiltración de 2.3GB de datos del padrón hacia IP 91.218.114.77 (C2 conocido)",
+        "confidence": "confirmed",
+        "category": "exfiltration"
+      },
+      {
+        "id": "B-F3",
+        "description": "El atacante mantuvo persistencia mediante scheduled task 'WindowsUpdate_Sync'",
+        "confidence": "confirmed",
+        "category": "persistence"
+      },
+      {
+        "id": "B-F4",
+        "description": "Movimiento lateral detectado hacia servidor de certificación electoral (cert-electoral-01)",
+        "confidence": "probable",
+        "category": "lateral-movement"
+      }
+    ],
+    "hypotheses": [
+      {
+        "id": "B-H1",
+        "description": "Operación de APT28/Fancy Bear dirigida a desestabilizar el proceso electoral",
+        "confidence": "probable"
+      },
+      {
+        "id": "B-H2",
+        "description": "El objetivo final es manipular o invalidar la certificación de resultados",
+        "confidence": "unconfirmed"
+      }
+    ],
+    "iocs": [
+      {
+        "type": "hash",
+        "value": "3a7b9c2d8e1f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+        "description": "SHA-256 del binario X-Agent encontrado en db-padron-primary"
+      },
+      {
+        "type": "ip",
+        "value": "91.218.114.77",
+        "description": "Servidor C2 receptor de datos exfiltrados (infraestructura conocida de APT28)"
+      },
+      {
+        "type": "ip",
+        "value": "185.220.101.34",
+        "description": "IP origen del acceso inicial (confirmado como proxy de ataque)"
+      },
+      {
+        "type": "domain",
+        "value": "update-service.electoral-sys.net",
+        "description": "Dominio C2 secundario utilizado para comunicación del implante"
+      }
+    ],
+    "recommendedActions": [
+      {
+        "description": "Contener inmediatamente db-padron-primary y cert-electoral-01: aislar de red",
+        "priority": 1,
+        "role": "soc"
+      },
+      {
+        "description": "Preservar evidencia forense completa antes de cualquier remediación",
+        "priority": 2,
+        "role": "soc"
+      },
+      {
+        "description": "Bloquear IOCs en perímetro: IPs 91.218.114.77, 185.220.101.34 y dominio C2",
+        "priority": 3,
+        "role": "soc"
+      },
+      {
+        "description": "Notificar al comité de crisis electoral y activar protocolo de incidente nacional",
+        "priority": 1,
+        "role": "ciso"
+      },
+      {
+        "description": "Evaluar obligación de reporte a autoridad nacional de ciberseguridad en <24h",
+        "priority": 2,
+        "role": "ciso"
+      }
+    ]
+  },
+  {
+    "id": "C",
+    "title": "Crisis Institucional y Decisión de Comunicación Pública",
+    "timestamp": "2024-11-05T16:00:00Z",
+    "severity": "critical",
+    "summary": "La situación escala a crisis institucional. Medios de comunicación tienen información parcial del incidente. Presión sobre la certificación oficial de resultados. Se requiere decisión inmediata sobre comunicación pública y continuidad del proceso electoral.",
+    "facts": [
+      {
+        "id": "C-F1",
+        "description": "Periodistas de 3 medios nacionales contactaron al organismo electoral con preguntas sobre 'hackeo al padrón'",
+        "confidence": "confirmed",
+        "category": "public-exposure"
+      },
+      {
+        "id": "C-F2",
+        "description": "Análisis forense confirma que los datos exfiltrados incluyen información de 4.2M de votantes",
+        "confidence": "confirmed",
+        "category": "data-breach"
+      },
+      {
+        "id": "C-F3",
+        "description": "No se encontró evidencia de modificación de resultados electorales ni del sistema de conteo",
+        "confidence": "confirmed",
+        "category": "electoral-integrity"
+      },
+      {
+        "id": "C-F4",
+        "description": "El servidor de certificación cert-electoral-01 fue accedido pero no se alteraron datos de certificación",
+        "confidence": "confirmed",
+        "category": "certification"
+      },
+      {
+        "id": "C-F5",
+        "description": "Marco regulatorio exige notificación pública de brecha de datos personales en <72h",
+        "confidence": "confirmed",
+        "category": "compliance"
+      }
+    ],
+    "hypotheses": [
+      {
+        "id": "C-H1",
+        "description": "El objetivo del ataque fue deslegitimar el proceso electoral, no alterar resultados",
+        "confidence": "probable"
+      },
+      {
+        "id": "C-H2",
+        "description": "Los datos exfiltrados podrían ser utilizados en campañas de desinformación",
+        "confidence": "probable"
+      }
+    ],
+    "iocs": [
+      {
+        "type": "hash",
+        "value": "3a7b9c2d8e1f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+        "description": "SHA-256 del binario X-Agent (ya contenido y eliminado)"
+      },
+      {
+        "type": "ip",
+        "value": "91.218.114.77",
+        "description": "Servidor C2 (bloqueado en perímetro)"
+      },
+      {
+        "type": "data",
+        "value": "4.2M registros PII",
+        "description": "Volumen de datos personales exfiltrados del padrón electoral"
+      }
+    ],
+    "recommendedActions": [
+      {
+        "description": "Verificar integridad completa del sistema de conteo y certificación con hash comparison",
+        "priority": 1,
+        "role": "soc"
+      },
+      {
+        "description": "Generar timeline forense completo para entrega a autoridades",
+        "priority": 2,
+        "role": "soc"
+      },
+      {
+        "description": "Decidir comunicación pública proactiva antes de filtración mediática incontrolada",
+        "priority": 1,
+        "role": "ciso"
+      },
+      {
+        "description": "Coordinar con autoridad electoral la declaración sobre integridad de resultados",
+        "priority": 2,
+        "role": "ciso"
+      },
+      {
+        "description": "Iniciar proceso de notificación de brecha de datos personales (plazo regulatorio <72h)",
+        "priority": 3,
+        "role": "ciso"
+      }
+    ]
+  }
+]
