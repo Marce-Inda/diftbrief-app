@@ -65,6 +65,23 @@
         "priority": 1,
         "role": "ciso"
       }
+    ],
+    "newEvidence": [
+      "847 modificaciones anómalas en registros del padrón (01:00-02:15 UTC)",
+      "Cuenta de servicio svc-padron-sync utilizada sin MFA",
+      "Conexiones desde IP 185.220.101.34 fuera de horario programado"
+    ],
+    "impactedAssets": [
+      "db-padron-primary (servidor de base de datos del padrón)",
+      "Cuenta de servicio svc-padron-sync"
+    ],
+    "businessImpact": [
+      "Posible compromiso de integridad de datos del padrón electoral",
+      "Riesgo de reputación si se confirma acceso no autorizado"
+    ],
+    "openDecisions": [
+      "¿Notificar al comité de seguridad electoral en esta etapa?",
+      "¿Escalar a incidente nacional o mantener como investigación interna?"
     ]
   },
   {
@@ -159,6 +176,29 @@
         "priority": 2,
         "role": "ciso"
       }
+    ],
+    "newEvidence": [
+      "Malware X-Agent (SHA-256: 3a7b9c...) identificado en db-padron-primary",
+      "Exfiltración de 2.3GB hacia C2 91.218.114.77",
+      "Persistencia vía scheduled task 'WindowsUpdate_Sync'",
+      "Movimiento lateral hacia cert-electoral-01"
+    ],
+    "impactedAssets": [
+      "db-padron-primary (servidor comprometido con X-Agent)",
+      "cert-electoral-01 (acceso lateral detectado)",
+      "Cuenta svc-padron-sync (vector de entrada inicial)",
+      "Segmento de red DMZ-Electoral"
+    ],
+    "businessImpact": [
+      "Compromiso confirmado de infraestructura electoral crítica por APT estatal",
+      "2.3GB de datos del padrón exfiltrados — posible brecha de datos personales",
+      "Riesgo de manipulación del sistema de certificación electoral",
+      "Obligación regulatoria de reporte en <24h"
+    ],
+    "openDecisions": [
+      "¿Activar protocolo de incidente nacional?",
+      "¿Reportar a autoridad nacional de ciberseguridad inmediatamente?",
+      "¿Iniciar proceso de notificación de brecha de datos?"
     ]
   },
   {
@@ -254,6 +294,31 @@
         "priority": 3,
         "role": "ciso"
       }
+    ],
+    "newEvidence": [
+      "3 medios nacionales contactaron al organismo con preguntas sobre 'hackeo al padrón'",
+      "Análisis forense confirma exfiltración de datos de 4.2M de votantes",
+      "No hay evidencia de modificación de resultados ni sistema de conteo",
+      "cert-electoral-01 accedido pero datos de certificación intactos"
+    ],
+    "impactedAssets": [
+      "Datos personales de 4.2M de votantes (exfiltrados)",
+      "db-padron-primary (contenido, evidencia preservada)",
+      "cert-electoral-01 (accedido, sin alteración de datos)",
+      "Reputación institucional del organismo electoral"
+    ],
+    "businessImpact": [
+      "Crisis institucional — exposición mediática inminente",
+      "4.2M de registros PII comprometidos — brecha de datos masiva",
+      "Presión sobre legitimidad de la certificación electoral",
+      "Plazo regulatorio de notificación de brecha <72h activo",
+      "Riesgo de campañas de desinformación con datos exfiltrados"
+    ],
+    "openDecisions": [
+      "¿Comunicación pública proactiva o reactiva ante los medios?",
+      "¿Declarar integridad de resultados electorales públicamente?",
+      "¿Iniciar notificación formal de brecha de datos personales ahora?",
+      "¿Solicitar auditoría externa independiente del sistema de conteo?"
     ]
   }
 ]

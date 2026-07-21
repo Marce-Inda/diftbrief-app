@@ -79,6 +79,14 @@ export interface Snapshot {
   iocs: IOC[];
   /** Acciones recomendadas */
   recommendedActions: RecommendedAction[];
+  /** Nueva evidencia técnica relevante para el SOC */
+  newEvidence: string[];
+  /** Activos afectados identificados */
+  impactedAssets: string[];
+  /** Impacto de negocio para perspectiva ejecutiva (CISO) */
+  businessImpact: string[];
+  /** Decisiones pendientes de tomar */
+  openDecisions: string[];
 }
 
 /** Solicitud de cálculo de drift */
