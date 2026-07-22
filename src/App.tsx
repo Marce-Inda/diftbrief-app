@@ -3,11 +3,9 @@
  * Integra todos los componentes y gestiona el estado de la aplicación.
  */
 
-import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
-import type { TransitionId, UserRole, Snapshot, Drift } from './types';
-import { calculateDrift } from './services/driftComparator';
-import { getAgentDrift } from './services/agentService';
-import type { DriftSource } from './services/agentService';
+import { useState, useMemo, lazy, Suspense } from 'react';
+import type { TransitionId, UserRole, Snapshot } from './types';
+import { useAgentDrift } from './hooks/useAgentDrift';
 import { Header } from './components/Header';
 import { IncidentCard } from './components/IncidentCard';
 import { SnapshotSelector } from './components/SnapshotSelector';
@@ -40,42 +38,17 @@ function App() {
     return { fromSnapshot: from!, toSnapshot: to! };
   }, [activeTransition]);
 
-  // Drift inmediato del motor local (garantiza renderizado instantáneo)
-  const localDrift = useMemo(() => {
-    return calculateDrift(fromSnapshot, toSnapshot);
-  }, [fromSnapshot, toSnapshot]);
-
-  // Estado del drift enriquecido por IA (async con fallback)
-  const [drift, setDrift] = useState<Drift>(localDrift);
-  const [driftSource, setDriftSource] = useState<DriftSource>('local');
-  const [fallbackReason, setFallbackReason] = useState<string | undefined>();
-  const [isEnriching, setIsEnriching] = useState(false);
-
-  useEffect(() => {
-    // Primero renderizamos con el local, luego intentamos enriquecer con IA
-    setDrift(localDrift);
-    setDriftSource('local');
-    setFallbackReason(undefined);
-    setIsEnriching(true);
-
-    let cancelled = false;
-    getAgentDrift(fromSnapshot, toSnapshot).then((result) => {
-      if (!cancelled) {
-        setDrift(result.drift);
-        setDriftSource(result.source);
-        setFallbackReason(result.fallbackReason);
-        setIsEnriching(false);
-      }
-    });
-
-    return () => { cancelled = true; };
-  }, [fromSnapshot, toSnapshot, localDrift]);
+  const { drift, source, fallbackReason, isEnriching } = useAgentDrift(fromSnapshot, toSnapshot);
 
   const filteredActions = useMemo(() => {
     return drift.recommendedActions
       .filter((a) => a.role === activeRole)
       .sort((a, b) => a.priority - b.priority);
   }, [drift.recommendedActions, activeRole]);
+
+  const sourceClassName = isEnriching
+    ? 'app__drift-source app__drift-source--loading'
+    : `app__drift-source app__drift-source--${source}`;
 
   return (
     <div className="app">
@@ -97,28 +70,14 @@ function App() {
 
         <DriftBanner headline={drift.headline} />
 
-        {/* Indicador de fuente del drift (para chaos testing) */}
-        <div className="app__drift-source" style={{
-          padding: '0.5rem 1rem',
-          borderRadius: '6px',
-          fontSize: '0.8rem',
-          background: isEnriching ? 'var(--color-border-subtle)' :
-                     driftSource === 'gemini' ? 'var(--color-confirmed)' :
-                     driftSource === 'groq' ? 'var(--color-probable)' :
-                     'var(--color-drift)',
-          color: isEnriching ? 'var(--color-text-secondary)' : 'var(--color-bg-base)',
-          fontWeight: 600,
-          display: 'inline-block',
-          marginBottom: '1rem',
-          transition: 'background 0.3s ease',
-        }}>
+        <div className={sourceClassName}>
           {isEnriching
             ? '⏳ Consultando agente IA...'
-            : `🔌 Fuente: ${driftSource.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
+            : `🔌 Fuente: ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
           }
         </div>
 
-        <Suspense fallback={<div style={{ padding: '1rem', color: 'var(--color-text-muted)' }}>Cargando panel...</div>}>
+        <Suspense fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
           <ComparisonPanel
             fromSnapshot={fromSnapshot}
             toSnapshot={toSnapshot}
@@ -164,7 +123,7 @@ function App() {
           </ol>
         </section>
 
-        <Suspense fallback={<div style={{ padding: '1rem', color: 'var(--color-text-muted)' }}>Cargando exportación...</div>}>
+        <Suspense fallback={<div className="app__lazy-fallback">Cargando exportación...</div>}>
           <BriefExportPanel
             socBriefing={drift.socBriefing}
             cisoBriefing={drift.cisoBriefing}
