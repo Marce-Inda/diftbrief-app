@@ -100,14 +100,14 @@ const MITRE_KEYWORDS: ReadonlyArray<{ keywords: string[]; mitreId: string }> = [
 /** Índice Fuse.js para regulaciones (busca en nombre, scope, jurisdicción) */
 const regulationFuse = new Fuse(SECURITY_KNOWLEDGE_BASE.regulations, {
   keys: ['name', 'scope', 'jurisdiction'],
-  threshold: 0.4,
+  threshold: 0.3,
   includeScore: true,
 });
 
 /** Índice Fuse.js para tácticas MITRE (busca en nombre, descripción, técnicas) */
 const mitreFuse = new Fuse(SECURITY_KNOWLEDGE_BASE.frameworks, {
   keys: ['name', 'description', 'commonTechniques'],
-  threshold: 0.4,
+  threshold: 0.3,
   includeScore: true,
 });
 
@@ -116,20 +116,37 @@ const mitreFuse = new Fuse(SECURITY_KNOWLEDGE_BASE.frameworks, {
 /**
  * Construye un texto de búsqueda consolidado a partir del drift.
  * Normalizado a minúsculas para matching insensible a mayúsculas.
+ * Maneja campos undefined/null de forma defensiva para evitar excepciones.
  * @param drift - Drift calculado localmente
- * @returns Texto concatenado con campos relevantes del drift
+ * @returns Texto concatenado con campos relevantes del drift (string vacío si drift es inválido)
  */
 function buildSearchText(drift: Drift): string {
-  const parts = [
-    drift.headline,
-    drift.severityChange.justification,
-    drift.urgentDecision.title,
-    drift.urgentDecision.description,
-    drift.urgentDecision.impact,
-    ...drift.newFacts.map(f => f.description),
-    ...drift.newIOCs.map(i => `${i.type} ${i.value} ${i.description}`),
-    ...drift.confidenceShifts.map(s => s.description),
-  ];
+  if (!drift) return '';
+
+  const parts: string[] = [];
+
+  if (drift.headline) parts.push(drift.headline);
+  if (drift.severityChange?.justification) parts.push(drift.severityChange.justification);
+  if (drift.urgentDecision?.title) parts.push(drift.urgentDecision.title);
+  if (drift.urgentDecision?.description) parts.push(drift.urgentDecision.description);
+  if (drift.urgentDecision?.impact) parts.push(drift.urgentDecision.impact);
+
+  if (Array.isArray(drift.newFacts)) {
+    for (const f of drift.newFacts) {
+      if (f.description) parts.push(f.description);
+    }
+  }
+  if (Array.isArray(drift.newIOCs)) {
+    for (const i of drift.newIOCs) {
+      parts.push([i.type, i.value, i.description].filter(Boolean).join(' '));
+    }
+  }
+  if (Array.isArray(drift.confidenceShifts)) {
+    for (const s of drift.confidenceShifts) {
+      if (s.description) parts.push(s.description);
+    }
+  }
+
   return parts.join(' ').toLowerCase();
 }
 
@@ -168,12 +185,13 @@ function matchMitreByKeyword(searchText: string): string | null {
 
 /**
  * Busca coincidencia de regulación con Fuse.js (fuzzy fallback).
+ * Solo acepta resultados con score < 0.4 (alta confianza) para evitar falsos positivos.
  * @param searchText - Texto del drift
  * @returns ID de la regulación mejor rankeada o null
  */
 function matchRegulationByFuzzy(searchText: string): string | null {
   const results = regulationFuse.search(searchText.slice(0, 200));
-  if (results.length > 0 && results[0].score !== undefined && results[0].score < 0.5) {
+  if (results.length > 0 && results[0].score !== undefined && results[0].score < 0.4) {
     return results[0].item.id;
   }
   return null;
@@ -181,12 +199,13 @@ function matchRegulationByFuzzy(searchText: string): string | null {
 
 /**
  * Busca coincidencia de táctica MITRE con Fuse.js (fuzzy fallback).
+ * Solo acepta resultados con score < 0.4 (alta confianza) para evitar falsos positivos.
  * @param searchText - Texto del drift
  * @returns ID de la táctica mejor rankeada o null
  */
 function matchMitreByFuzzy(searchText: string): string | null {
   const results = mitreFuse.search(searchText.slice(0, 200));
-  if (results.length > 0 && results[0].score !== undefined && results[0].score < 0.5) {
+  if (results.length > 0 && results[0].score !== undefined && results[0].score < 0.4) {
     return results[0].item.id;
   }
   return null;
@@ -207,6 +226,14 @@ function matchMitreByFuzzy(searchText: string): string | null {
  */
 export function routeContextLocally(drift: Drift): LocalRouterContext {
   const searchText = buildSearchText(drift);
+
+  // Guard: si el texto de búsqueda está vacío, retornar contexto por defecto
+  if (!searchText) {
+    console.warn('[LocalRouter] Drift vacío o inválido, usando contexto por defecto.');
+    const regulation = SECURITY_KNOWLEDGE_BASE.regulations.find(r => r.id === DEFAULT_REGULATION_ID)!;
+    const mitreTactic = SECURITY_KNOWLEDGE_BASE.frameworks.find(f => f.id === DEFAULT_MITRE_ID)!;
+    return { regulation, mitreTactic, playbooks: SECURITY_KNOWLEDGE_BASE.playbooks };
+  }
 
   // Paso 1: Keyword matching directo
   let regulationId = matchRegulationByKeyword(searchText);
