@@ -64,17 +64,88 @@ function getDefaultContext(): RouterContext {
   };
 }
 
+// ─── Structured Output Schemas (JSON Schema) ─────────────────────────────────
+
+/**
+ * Schema JSON para la respuesta del Agente Enrutador.
+ * Fuerza que la API retorne exactamente la estructura esperada.
+ */
+const ROUTER_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    regulationId: { type: 'STRING', description: 'ID de la regulación seleccionada del catálogo' },
+    mitreId: { type: 'STRING', description: 'ID de la táctica MITRE ATT&CK seleccionada del catálogo' },
+  },
+  required: ['regulationId', 'mitreId'],
+} as const;
+
+/**
+ * Schema JSON para la respuesta de los Agentes Redactores (SOC/CISO).
+ * Fuerza que la API retorne un objeto con campo briefing obligatorio.
+ */
+const WRITER_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    briefing: { type: 'STRING', description: 'Texto del briefing generado para el rol correspondiente' },
+  },
+  required: ['briefing'],
+} as const;
+
+/**
+ * Schema JSON para Groq (formato OpenAI json_schema).
+ * Estructura compatible con la API de Groq/OpenAI.
+ */
+const GROQ_ROUTER_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'router_response',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        regulationId: { type: 'string', description: 'ID de la regulación seleccionada del catálogo' },
+        mitreId: { type: 'string', description: 'ID de la táctica MITRE ATT&CK seleccionada del catálogo' },
+      },
+      required: ['regulationId', 'mitreId'],
+      additionalProperties: false,
+    },
+  },
+};
+
+const GROQ_WRITER_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'writer_response',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        briefing: { type: 'string', description: 'Texto del briefing generado para el rol correspondiente' },
+      },
+      required: ['briefing'],
+      additionalProperties: false,
+    },
+  },
+};
+
+/** Tipo de agente para seleccionar el schema correcto */
+type AgentType = 'router' | 'writer';
+
 // ─── Utilidades de Llamada LLM ────────────────────────────────────────────────
 
 /**
- * Ejecuta una llamada a Gemini con el system prompt y user prompt dados.
+ * Ejecuta una llamada a Gemini con structured output nativo (responseSchema).
+ * El schema fuerza matemáticamente la estructura de la respuesta a nivel de API.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
+ * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta parseado o null si falla
  */
-async function callGemini(systemPrompt: string, userPrompt: string): Promise<string | null> {
+async function callGemini(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return null;
+
+  const responseSchema = agentType === 'router' ? ROUTER_RESPONSE_SCHEMA : WRITER_RESPONSE_SCHEMA;
 
   try {
     const response = await fetch(
@@ -87,6 +158,7 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
           contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
+            responseSchema,
             temperature: 0.0,
             topP: 0.1,
           },
@@ -107,14 +179,18 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
 }
 
 /**
- * Ejecuta una llamada a Groq con el system prompt y user prompt dados.
+ * Ejecuta una llamada a Groq con structured output nativo (json_schema strict mode).
+ * El schema fuerza que la respuesta cumpla exactamente la estructura definida.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
+ * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta parseado o null si falla
  */
-async function callGroq(systemPrompt: string, userPrompt: string): Promise<string | null> {
+async function callGroq(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
   if (!apiKey) return null;
+
+  const responseFormat = agentType === 'router' ? GROQ_ROUTER_SCHEMA : GROQ_WRITER_SCHEMA;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -131,7 +207,7 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
         ],
         temperature: 0.0,
         top_p: 0.1,
-        response_format: { type: 'json_object' },
+        response_format: responseFormat,
       }),
       signal: AbortSignal.timeout(10000),
     });
@@ -148,16 +224,17 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
 }
 
 /**
- * Ejecuta una llamada LLM con fallback Gemini → Groq.
+ * Ejecuta una llamada LLM con fallback Gemini → Groq, usando structured outputs nativos.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
+ * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta o null si ambos fallan
  */
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<{ text: string; source: DriftSource } | null> {
-  const geminiResult = await callGemini(systemPrompt, userPrompt);
+async function callLLM(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<{ text: string; source: DriftSource } | null> {
+  const geminiResult = await callGemini(systemPrompt, userPrompt, agentType);
   if (geminiResult) return { text: geminiResult, source: 'gemini' };
 
-  const groqResult = await callGroq(systemPrompt, userPrompt);
+  const groqResult = await callGroq(systemPrompt, userPrompt, agentType);
   if (groqResult) return { text: groqResult, source: 'groq' };
 
   return null;
@@ -173,6 +250,12 @@ REGLAS ESTRICTAS:
 - NO incluyas markdown, comentarios, ni texto fuera del JSON.
 - Selecciona exactamente 1 regulación y 1 táctica MITRE del catálogo proporcionado.
 - Basa tu selección en la naturaleza del incidente y los datos exfiltrados/comprometidos.
+
+DIRECTIVAS CONSTITUCIONALES (ANTI-ALUCINACIÓN):
+- SOLO puedes seleccionar IDs que existan LITERALMENTE en el catálogo proporcionado.
+- NO inventes IDs de regulaciones ni tácticas que no aparezcan en la lista.
+- Si no encuentras una coincidencia perfecta, selecciona la más cercana del catálogo disponible.
+- Tu respuesta está restringida al universo cerrado de opciones proporcionadas.
 
 SCHEMA DE RESPUESTA:
 {
@@ -241,7 +324,7 @@ function validateRouterResponse(parsed: unknown): RouterResponse | null {
  */
 async function getIncidentContext(drift: Drift): Promise<RouterContext> {
   const prompt = buildRouterPrompt(drift);
-  const llmResult = await callLLM(ROUTER_SYSTEM_PROMPT, prompt);
+  const llmResult = await callLLM(ROUTER_SYSTEM_PROMPT, prompt, 'router');
 
   if (!llmResult) {
     console.warn('[Router] Ambas APIs fallaron, usando contexto por defecto.');
@@ -283,7 +366,15 @@ REGLAS ESTRICTAS:
 - Cita la táctica MITRE y técnicas específicas cuando las menciones.
 - Referencia los pasos del playbook aplicable.
 - NO inventes datos que no estén en el drift o la base de conocimiento proporcionada.
-- El briefing debe ser técnico, conciso y accionable para un equipo SOC.`;
+- El briefing debe ser técnico, conciso y accionable para un equipo SOC.
+
+DIRECTIVAS CONSTITUCIONALES (ANTI-ALUCINACIÓN):
+- Basa tu respuesta EXCLUSIVAMENTE en el Drift y el contexto táctico provisto. No asumas infraestructura que no esté listada.
+- NO inventes IOCs, hashes, IPs o dominios que no aparezcan en los datos del drift.
+- NO asumas herramientas, sistemas operativos o topología de red no mencionados explícitamente.
+- NO generes recomendaciones basadas en técnicas MITRE que no estén en el catálogo proporcionado.
+- Si un dato no está disponible en el contexto, indica "información no disponible" en lugar de inventarlo.
+- Cada afirmación técnica DEBE ser trazable a un dato proporcionado en el drift o la base de conocimiento.`;
 
 /**
  * Construye el prompt para el Agente Redactor SOC.
@@ -329,7 +420,16 @@ REGLAS ESTRICTAS:
 - Cuantifica el riesgo financiero citando la penalización exacta de la regulación.
 - Menciona el deadline de notificación obligatoria en horas.
 - NO inventes datos regulatorios que no estén en la base de conocimiento proporcionada.
-- El briefing debe ser ejecutivo, orientado a decisiones y riesgo de negocio.`;
+- El briefing debe ser ejecutivo, orientado a decisiones y riesgo de negocio.
+
+DIRECTIVAS CONSTITUCIONALES (ANTI-ALUCINACIÓN):
+- Basa tu respuesta EXCLUSIVAMENTE en el Drift y el contexto legal/regulatorio provisto. No asumas regulaciones no listadas.
+- NO inventes multas, porcentajes de facturación o importes monetarios que no estén LITERALMENTE en la regulación proporcionada.
+- NO inventes plazos de notificación distintos a los indicados en el campo "notificationDeadlineHours".
+- NO asumas jurisdicciones, autoridades competentes o artículos regulatorios no mencionados explícitamente.
+- NO generes estimaciones de impacto financiero sin base en los datos proporcionados.
+- Si un dato regulatorio específico no está disponible, indica "según la regulación aplicable" en lugar de inventar cifras.
+- Cada afirmación sobre riesgo legal DEBE ser trazable a un artículo o dato provisto en la base de conocimiento.`;
 
 /**
  * Construye el prompt para el Agente Redactor CISO.
@@ -409,8 +509,8 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   const cisoPrompt = buildCISOPrompt(baseDrift, context.regulation);
 
   const [socResult, cisoResult] = await Promise.all([
-    callLLM(SOC_WRITER_SYSTEM_PROMPT, socPrompt),
-    callLLM(CISO_WRITER_SYSTEM_PROMPT, cisoPrompt),
+    callLLM(SOC_WRITER_SYSTEM_PROMPT, socPrompt, 'writer'),
+    callLLM(CISO_WRITER_SYSTEM_PROMPT, cisoPrompt, 'writer'),
   ]);
 
   // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
