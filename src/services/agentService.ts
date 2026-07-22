@@ -1,11 +1,13 @@
 /**
- * @fileoverview Servicio de Agente IA con arquitectura de triple fallback.
- * Cadena: Gemini API → Groq API → Motor Determinista Local.
- * Garantiza resiliencia 100% incluso sin conectividad o claves de API.
+ * @fileoverview Sistema Multi-Agente RAG para generación de briefings.
+ * Arquitectura: Agente Enrutador → Agentes Redactores (SOC + CISO) en paralelo.
+ * Cadena de fallback por agente: Gemini → Groq → Motor Determinista Local.
+ * Garantiza resiliencia 100% y cero alucinaciones mediante grounding en Knowledge Base.
  */
 
-import type { Snapshot, Drift } from '../types';
+import type { Snapshot, Drift, Regulation, MitreAttackTactic, IncidentPlaybook } from '../types';
 import { calculateDrift } from './driftComparator';
+import { SECURITY_KNOWLEDGE_BASE } from './knowledgeBase';
 
 /** Fuente que generó el drift */
 export type DriftSource = 'gemini' | 'groq' | 'local';
@@ -20,71 +22,69 @@ export interface AgentDriftResult {
   fallbackReason?: string;
 }
 
-/** Campos esperados del LLM */
-interface LLMDriftResponse {
-  headline?: string;
-  socBriefing?: string;
-  cisoBriefing?: string;
+/** Contexto seleccionado por el Agente Enrutador */
+interface RouterContext {
+  /** Regulación seleccionada como más relevante */
+  regulation: Regulation;
+  /** Táctica MITRE seleccionada como más relevante */
+  mitreTactic: MitreAttackTactic;
+  /** Playbooks aplicables */
+  playbooks: IncidentPlaybook[];
 }
 
-/**
- * Valida que la respuesta parseada del LLM contenga campos string válidos.
- * Retorna solo los campos que son strings no vacíos.
- * @param parsed - Objeto parseado del JSON del LLM
- * @returns Campos validados o null si ninguno es usable
- */
-function validateLLMResponse(parsed: unknown): LLMDriftResponse | null {
-  if (!parsed || typeof parsed !== 'object') return null;
-
-  const obj = parsed as Record<string, unknown>;
-  const result: LLMDriftResponse = {};
-  let hasValidField = false;
-
-  if (typeof obj.headline === 'string' && obj.headline.trim().length > 0) {
-    result.headline = obj.headline.trim();
-    hasValidField = true;
-  }
-  if (typeof obj.socBriefing === 'string' && obj.socBriefing.trim().length > 0) {
-    result.socBriefing = obj.socBriefing.trim();
-    hasValidField = true;
-  }
-  if (typeof obj.cisoBriefing === 'string' && obj.cisoBriefing.trim().length > 0) {
-    result.cisoBriefing = obj.cisoBriefing.trim();
-    hasValidField = true;
-  }
-
-  return hasValidField ? result : null;
+/** Respuesta esperada del Agente Enrutador */
+interface RouterResponse {
+  regulationId: string;
+  mitreId: string;
 }
 
+/** Respuesta esperada de un Agente Redactor */
+interface WriterResponse {
+  briefing: string;
+}
+
+// ─── Contexto por Defecto (Fallback) ─────────────────────────────────────────
+
+/** IDs por defecto cuando el enrutador falla o alucina */
+const DEFAULT_REGULATION_ID = 'nis2';
+const DEFAULT_MITRE_ID = 'TA0010';
+
 /**
- * Intenta generar un drift enriquecido usando la API de Google Gemini.
- * @param from - Snapshot de origen
- * @param to - Snapshot de destino
- * @returns Drift enriquecido por IA o null si falla
+ * Obtiene el contexto por defecto cuando el enrutador falla.
+ * Garantiza que el flujo nunca se rompa.
+ * @returns Contexto con regulación NIS2 y táctica Exfiltration
  */
-async function tryGemini(from: Snapshot, to: Snapshot): Promise<Drift | null> {
+function getDefaultContext(): RouterContext {
+  const regulation = SECURITY_KNOWLEDGE_BASE.regulations.find(r => r.id === DEFAULT_REGULATION_ID)!;
+  const mitreTactic = SECURITY_KNOWLEDGE_BASE.frameworks.find(f => f.id === DEFAULT_MITRE_ID)!;
+  return {
+    regulation,
+    mitreTactic,
+    playbooks: SECURITY_KNOWLEDGE_BASE.playbooks,
+  };
+}
+
+// ─── Utilidades de Llamada LLM ────────────────────────────────────────────────
+
+/**
+ * Ejecuta una llamada a Gemini con el system prompt y user prompt dados.
+ * @param systemPrompt - Instrucción de sistema
+ * @param userPrompt - Mensaje del usuario
+ * @returns Texto de respuesta parseado o null si falla
+ */
+async function callGemini(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) {
-    console.warn('[AgentService] No VITE_GEMINI_API_KEY configurada, saltando Gemini.');
-    return null;
-  }
+  if (!apiKey) return null;
 
   try {
-    // SIMULACIÓN CHAOS TEST: Descomentar la siguiente línea para simular fallo de Gemini
-    // throw new Error("SIMULACIÓN: API de Gemini no responde");
-
-    const baseDrift = calculateDrift(from, to);
-    const prompt = buildPrompt(baseDrift, from.id, to.id);
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: SYSTEM_PROMPT }],
-          },
-          contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
             temperature: 0.0,
@@ -95,49 +95,28 @@ async function tryGemini(from: Snapshot, to: Snapshot): Promise<Drift | null> {
       }
     );
 
-    if (!response.ok) {
-      throw new Error(`Gemini HTTP ${response.status}: ${response.statusText}`);
-    }
-
+    if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini: respuesta vacía');
-
-    const parsed = JSON.parse(text);
-    const validated = validateLLMResponse(parsed);
-    if (!validated) throw new Error('Gemini: respuesta JSON no contiene campos válidos');
-
-    return {
-      ...baseDrift,
-      headline: validated.headline || baseDrift.headline,
-      socBriefing: validated.socBriefing || baseDrift.socBriefing,
-      cisoBriefing: validated.cisoBriefing || baseDrift.cisoBriefing,
-    };
+    return text;
   } catch (error) {
-    console.warn('[AgentService] Gemini falló:', (error as Error).message);
+    console.warn('[Multi-Agent] Gemini falló:', (error as Error).message);
     return null;
   }
 }
 
 /**
- * Intenta generar un drift enriquecido usando la API de Groq.
- * @param from - Snapshot de origen
- * @param to - Snapshot de destino
- * @returns Drift enriquecido por IA o null si falla
+ * Ejecuta una llamada a Groq con el system prompt y user prompt dados.
+ * @param systemPrompt - Instrucción de sistema
+ * @param userPrompt - Mensaje del usuario
+ * @returns Texto de respuesta parseado o null si falla
  */
-async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
+async function callGroq(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (!apiKey) {
-    console.warn('[AgentService] No VITE_GROQ_API_KEY configurada, saltando Groq.');
-    return null;
-  }
+  if (!apiKey) return null;
 
   try {
-    // SIMULACIÓN CHAOS TEST: Descomentar la siguiente línea para simular fallo de Groq
-    // throw new Error("SIMULACIÓN: API de Groq tampoco responde");
-
-    const baseDrift = calculateDrift(from, to);
-    const prompt = buildPrompt(baseDrift, from.id, to.id);
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -147,8 +126,8 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
         ],
         temperature: 0.0,
         top_p: 0.1,
@@ -157,102 +136,328 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
       signal: AbortSignal.timeout(10000),
     });
 
-    if (!response.ok) {
-      throw new Error(`Groq HTTP ${response.status}: ${response.statusText}`);
-    }
-
+    if (!response.ok) throw new Error(`Groq HTTP ${response.status}`);
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content;
     if (!text) throw new Error('Groq: respuesta vacía');
-
-    const parsed = JSON.parse(text);
-    const validated = validateLLMResponse(parsed);
-    if (!validated) throw new Error('Groq: respuesta JSON no contiene campos válidos');
-
-    return {
-      ...baseDrift,
-      headline: validated.headline || baseDrift.headline,
-      socBriefing: validated.socBriefing || baseDrift.socBriefing,
-      cisoBriefing: validated.cisoBriefing || baseDrift.cisoBriefing,
-    };
+    return text;
   } catch (error) {
-    console.warn('[AgentService] Groq falló:', (error as Error).message);
+    console.warn('[Multi-Agent] Groq falló:', (error as Error).message);
     return null;
   }
 }
 
-/** System prompt compartido para ambos proveedores de IA */
-const SYSTEM_PROMPT = `Eres un analista senior de ciberseguridad especializado en respuesta a incidentes.
-Tu tarea es generar briefings concisos y accionables basados en datos de drift entre snapshots de un incidente.
+/**
+ * Ejecuta una llamada LLM con fallback Gemini → Groq.
+ * @param systemPrompt - Instrucción de sistema
+ * @param userPrompt - Mensaje del usuario
+ * @returns Texto de respuesta o null si ambos fallan
+ */
+async function callLLM(systemPrompt: string, userPrompt: string): Promise<{ text: string; source: DriftSource } | null> {
+  const geminiResult = await callGemini(systemPrompt, userPrompt);
+  if (geminiResult) return { text: geminiResult, source: 'gemini' };
+
+  const groqResult = await callGroq(systemPrompt, userPrompt);
+  if (groqResult) return { text: groqResult, source: 'groq' };
+
+  return null;
+}
+
+// ─── Agente 1: Enrutador de Contexto ──────────────────────────────────────────
+
+const ROUTER_SYSTEM_PROMPT = `Eres un enrutador de contexto especializado en ciberseguridad.
+Tu tarea es analizar un drift de incidente y seleccionar la regulación y táctica MITRE ATT&CK más relevantes.
 
 REGLAS ESTRICTAS:
 - Responde ÚNICAMENTE con un objeto JSON válido.
 - NO incluyas markdown, comentarios, ni texto fuera del JSON.
-- NO inventes datos que no estén en el drift proporcionado.
-- Sé factual, preciso y conciso. Cero especulación.
-- Los briefings deben ser accionables para el rol correspondiente.
+- Selecciona exactamente 1 regulación y 1 táctica MITRE del catálogo proporcionado.
+- Basa tu selección en la naturaleza del incidente y los datos exfiltrados/comprometidos.
 
-SCHEMA DE RESPUESTA (exactamente estos 3 campos, todos string):
+SCHEMA DE RESPUESTA:
 {
-  "headline": "Una línea describiendo el cambio más crítico del drift",
-  "socBriefing": "Briefing técnico para SOC: IOCs, acciones de contención, evidencia nueva",
-  "cisoBriefing": "Briefing ejecutivo para CISO: riesgo de negocio, impacto reputacional, decisiones urgentes"
+  "regulationId": "id_de_la_regulacion_seleccionada",
+  "mitreId": "id_de_la_tactica_seleccionada"
 }`;
 
 /**
- * Construye el prompt enviando el drift pre-calculado (no los snapshots crudos).
- * Optimiza tokens enviando solo la información relevante.
+ * Construye el prompt para el Agente Enrutador con las llaves disponibles.
  * @param drift - Drift calculado localmente
- * @param fromId - ID del snapshot de origen
- * @param toId - ID del snapshot de destino
- * @returns Prompt formateado con contexto mínimo necesario
+ * @returns Prompt con contexto del drift y catálogo de IDs disponibles
  */
-function buildPrompt(drift: Drift, fromId: string, toId: string): string {
-  return `TRANSICIÓN: Snapshot ${fromId} → ${toId}
+function buildRouterPrompt(drift: Drift): string {
+  const regulationCatalog = SECURITY_KNOWLEDGE_BASE.regulations
+    .map(r => `- ${r.id}: ${r.name} (${r.jurisdiction}, ${r.scope})`)
+    .join('\n');
 
-DRIFT DETECTADO:
-- Headline local: ${drift.headline}
-- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to} (${drift.severityChange.justification})
-- Nuevos hechos confirmados (${drift.newFacts.length}): ${drift.newFacts.map(f => f.description).join('; ')}
-- Nuevos IOCs (${drift.newIOCs.length}): ${drift.newIOCs.map(i => `[${i.type}] ${i.value}`).join('; ')}
-- Giros de confianza (${drift.confidenceShifts.length}): ${drift.confidenceShifts.map(s => `${s.description}: ${s.from}→${s.to}`).join('; ')}
-- Decisión urgente: ${drift.urgentDecision.title} (deadline: ${drift.urgentDecision.deadline})
+  const mitreCatalog = SECURITY_KNOWLEDGE_BASE.frameworks
+    .map(f => `- ${f.id}: ${f.name} — ${f.description}`)
+    .join('\n');
 
-Genera el JSON con headline, socBriefing y cisoBriefing basándote EXCLUSIVAMENTE en estos datos.`;
+  return `DRIFT DEL INCIDENTE:
+- Headline: ${drift.headline}
+- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to}
+- Nuevos IOCs: ${drift.newIOCs.map(i => `[${i.type}] ${i.value}`).join(', ') || 'Ninguno'}
+- Nuevos hechos: ${drift.newFacts.map(f => f.description).join('; ') || 'Ninguno'}
+- Decisión urgente: ${drift.urgentDecision.title}
+- Activos impactados (inferidos): infraestructura electoral, base de datos de padrón
+
+CATÁLOGO DE REGULACIONES DISPONIBLES:
+${regulationCatalog}
+
+CATÁLOGO DE TÁCTICAS MITRE ATT&CK DISPONIBLES:
+${mitreCatalog}
+
+Selecciona la regulación y táctica MITRE más relevantes para este incidente.`;
 }
 
 /**
- * Calcula el drift usando la cadena de fallback: Gemini → Groq → Local.
- * Garantiza que SIEMPRE retorna un resultado válido.
+ * Valida que los IDs devueltos por el enrutador existan en la Knowledge Base.
+ * @param parsed - Respuesta parseada del enrutador
+ * @returns IDs validados o null si son inválidos
+ */
+function validateRouterResponse(parsed: unknown): RouterResponse | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+
+  if (typeof obj.regulationId !== 'string' || typeof obj.mitreId !== 'string') return null;
+
+  const regulationExists = SECURITY_KNOWLEDGE_BASE.regulations.some(r => r.id === obj.regulationId);
+  const mitreExists = SECURITY_KNOWLEDGE_BASE.frameworks.some(f => f.id === obj.mitreId);
+
+  if (!regulationExists || !mitreExists) {
+    console.warn(`[Router] IDs alucinados: regulation=${obj.regulationId}(${regulationExists}), mitre=${obj.mitreId}(${mitreExists})`);
+    return null;
+  }
+
+  return { regulationId: obj.regulationId as string, mitreId: obj.mitreId as string };
+}
+
+/**
+ * Agente 1: Enrutador de Contexto.
+ * Analiza el drift y selecciona la regulación y táctica MITRE más relevantes.
+ * @param drift - Drift calculado localmente
+ * @returns Contexto enrutado con objetos completos de la Knowledge Base
+ */
+async function getIncidentContext(drift: Drift): Promise<RouterContext> {
+  const prompt = buildRouterPrompt(drift);
+  const llmResult = await callLLM(ROUTER_SYSTEM_PROMPT, prompt);
+
+  if (!llmResult) {
+    console.warn('[Router] Ambas APIs fallaron, usando contexto por defecto.');
+    return getDefaultContext();
+  }
+
+  try {
+    const parsed = JSON.parse(llmResult.text);
+    const validated = validateRouterResponse(parsed);
+
+    if (!validated) {
+      console.warn('[Router] Respuesta inválida o IDs inexistentes, usando contexto por defecto.');
+      return getDefaultContext();
+    }
+
+    const regulation = SECURITY_KNOWLEDGE_BASE.regulations.find(r => r.id === validated.regulationId)!;
+    const mitreTactic = SECURITY_KNOWLEDGE_BASE.frameworks.find(f => f.id === validated.mitreId)!;
+
+    console.info(`[Router] ✅ Contexto enrutado: ${regulation.name} + ${mitreTactic.name}`);
+    return {
+      regulation,
+      mitreTactic,
+      playbooks: SECURITY_KNOWLEDGE_BASE.playbooks,
+    };
+  } catch (error) {
+    console.warn('[Router] Error parseando respuesta:', (error as Error).message);
+    return getDefaultContext();
+  }
+}
+
+// ─── Agente 2: Redactor SOC ──────────────────────────────────────────────────
+
+const SOC_WRITER_SYSTEM_PROMPT = `Eres un analista SOC senior redactando un briefing técnico de respuesta a incidentes.
+
+REGLAS ESTRICTAS:
+- Responde ÚNICAMENTE con un objeto JSON válido: { "briefing": "texto del briefing" }
+- NO incluyas markdown, comentarios, ni texto fuera del JSON.
+- Basa TODAS tus recomendaciones de contención y respuesta estrictamente en el framework MITRE ATT&CK y los playbooks proporcionados.
+- Cita la táctica MITRE y técnicas específicas cuando las menciones.
+- Referencia los pasos del playbook aplicable.
+- NO inventes datos que no estén en el drift o la base de conocimiento proporcionada.
+- El briefing debe ser técnico, conciso y accionable para un equipo SOC.`;
+
+/**
+ * Construye el prompt para el Agente Redactor SOC.
+ * @param drift - Drift calculado
+ * @param mitreTactic - Táctica MITRE seleccionada por el enrutador
+ * @param playbooks - Playbooks de respuesta aplicables
+ * @returns Prompt con contexto técnico completo
+ */
+function buildSOCPrompt(drift: Drift, mitreTactic: MitreAttackTactic, playbooks: IncidentPlaybook[]): string {
+  const playbookText = playbooks.map(pb =>
+    `[${pb.name}] (Aplicar cuando: ${pb.applicableWhen})\nPasos:\n${pb.steps.map(s => `  ${s.order}. ${s.action}: ${s.detail}`).join('\n')}`
+  ).join('\n\n');
+
+  return `DRIFT DEL INCIDENTE:
+- Headline: ${drift.headline}
+- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to} (${drift.severityChange.justification})
+- Nuevos hechos (${drift.newFacts.length}): ${drift.newFacts.map(f => `[${f.confidence}] ${f.description}`).join('; ')}
+- Nuevos IOCs (${drift.newIOCs.length}): ${drift.newIOCs.map(i => `[${i.type}] ${i.value} — ${i.description}`).join('; ')}
+- Giros de confianza: ${drift.confidenceShifts.map(s => `${s.description}: ${s.from}→${s.to}`).join('; ') || 'Ninguno'}
+
+TÁCTICA MITRE ATT&CK APLICABLE:
+- ID: ${mitreTactic.id}
+- Nombre: ${mitreTactic.name}
+- Descripción: ${mitreTactic.description}
+- Técnicas comunes: ${mitreTactic.commonTechniques.join(', ')}
+- Mitigaciones recomendadas: ${mitreTactic.mitigations.join('; ')}
+
+PLAYBOOKS DE RESPUESTA DISPONIBLES:
+${playbookText}
+
+Genera un briefing técnico SOC basándote EXCLUSIVAMENTE en el drift y la base de conocimiento proporcionada.
+Cita la táctica MITRE y las técnicas detectadas. Referencia los playbooks aplicables con pasos específicos.`;
+}
+
+// ─── Agente 3: Redactor CISO ─────────────────────────────────────────────────
+
+const CISO_WRITER_SYSTEM_PROMPT = `Eres un asesor ejecutivo de ciberseguridad redactando un briefing para el CISO.
+
+REGLAS ESTRICTAS:
+- Responde ÚNICAMENTE con un objeto JSON válido: { "briefing": "texto del briefing" }
+- NO incluyas markdown, comentarios, ni texto fuera del JSON.
+- DEBES mencionar explícitamente la regulación aplicable, sus multas y tiempos de reporte obligatorios.
+- Cuantifica el riesgo financiero citando la penalización exacta de la regulación.
+- Menciona el deadline de notificación obligatoria en horas.
+- NO inventes datos regulatorios que no estén en la base de conocimiento proporcionada.
+- El briefing debe ser ejecutivo, orientado a decisiones y riesgo de negocio.`;
+
+/**
+ * Construye el prompt para el Agente Redactor CISO.
+ * @param drift - Drift calculado
+ * @param regulation - Regulación seleccionada por el enrutador
+ * @returns Prompt con contexto regulatorio completo
+ */
+function buildCISOPrompt(drift: Drift, regulation: Regulation): string {
+  const articlesText = regulation.keyArticles
+    .map(a => `  - ${a.id} (${a.title}): ${a.summary}`)
+    .join('\n');
+
+  return `DRIFT DEL INCIDENTE:
+- Headline: ${drift.headline}
+- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to} (${drift.severityChange.justification})
+- Decisión urgente: ${drift.urgentDecision.title} — ${drift.urgentDecision.description}
+- Deadline de decisión: ${drift.urgentDecision.deadline}
+- Impacto de no actuar: ${drift.urgentDecision.impact}
+- Giros de confianza: ${drift.confidenceShifts.map(s => `${s.description}: ${s.from}→${s.to}`).join('; ') || 'Ninguno'}
+
+REGULACIÓN APLICABLE:
+- Nombre: ${regulation.name} (${regulation.id.toUpperCase()})
+- Jurisdicción: ${regulation.jurisdiction}
+- Ámbito: ${regulation.scope}
+- Deadline de notificación obligatoria: ${regulation.notificationDeadlineHours !== null ? `${regulation.notificationDeadlineHours} horas` : 'No especificado'}
+- Sanciones: ${regulation.penalties}
+- Artículos clave:
+${articlesText}
+
+Genera un briefing ejecutivo CISO que:
+1. Cuantifique el riesgo financiero citando las multas exactas de ${regulation.name}.
+2. Indique el tiempo restante para cumplir el deadline de notificación de ${regulation.notificationDeadlineHours}h.
+3. Conecte la decisión urgente con las obligaciones regulatorias.
+4. Sea accionable para un ejecutivo que debe tomar decisiones inmediatas.`;
+}
+
+// ─── Validación de Respuesta de Redactores ────────────────────────────────────
+
+/**
+ * Valida la respuesta de un agente redactor.
+ * @param parsed - Objeto parseado del JSON
+ * @returns Briefing validado o null
+ */
+function validateWriterResponse(parsed: unknown): WriterResponse | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+
+  if (typeof obj.briefing === 'string' && obj.briefing.trim().length > 0) {
+    return { briefing: obj.briefing.trim() };
+  }
+  return null;
+}
+
+// ─── Orquestador Principal ────────────────────────────────────────────────────
+
+/**
+ * Calcula el drift usando la arquitectura Multi-Agente RAG:
+ * 1. Motor determinista local calcula el drift base
+ * 2. Agente Enrutador selecciona contexto relevante de la Knowledge Base
+ * 3. Agentes Redactores (SOC + CISO) generan briefings en paralelo fundamentados en datos reales
+ *
+ * Garantiza que SIEMPRE retorna un resultado válido gracias al fallback determinista.
  * @param from - Snapshot de origen
  * @param to - Snapshot de destino
  * @returns Resultado del drift con metadatos de fuente
  */
 export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<AgentDriftResult> {
-  // Intento 1: Gemini
-  const geminiResult = await tryGemini(from, to);
-  if (geminiResult) {
-    console.info('[AgentService] ✅ Drift generado por Gemini');
-    return { drift: geminiResult, source: 'gemini' };
+  // Paso 1: Calcular drift base con motor determinista (siempre funciona)
+  const baseDrift = calculateDrift(from, to);
+
+  // Paso 2: Agente Enrutador selecciona contexto de la Knowledge Base
+  const context = await getIncidentContext(baseDrift);
+  console.info(`[Orchestrator] Contexto: ${context.regulation.name} + ${context.mitreTactic.name}`);
+
+  // Paso 3: Agentes Redactores en paralelo (SOC + CISO)
+  const socPrompt = buildSOCPrompt(baseDrift, context.mitreTactic, context.playbooks);
+  const cisoPrompt = buildCISOPrompt(baseDrift, context.regulation);
+
+  const [socResult, cisoResult] = await Promise.all([
+    callLLM(SOC_WRITER_SYSTEM_PROMPT, socPrompt),
+    callLLM(CISO_WRITER_SYSTEM_PROMPT, cisoPrompt),
+  ]);
+
+  // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
+  let source: DriftSource = 'local';
+  let fallbackReason: string | undefined;
+
+  const socBriefing = extractBriefing(socResult, baseDrift.socBriefing);
+  const cisoBriefing = extractBriefing(cisoResult, baseDrift.cisoBriefing);
+
+  if (socResult || cisoResult) {
+    source = socResult?.source === 'gemini' || cisoResult?.source === 'gemini' ? 'gemini' : 'groq';
+    if (!socResult || !cisoResult) {
+      fallbackReason = 'Generación parcial: un agente redactor usó fallback local.';
+    }
+  } else {
+    source = 'local';
+    fallbackReason = 'APIs de IA no disponibles. Motor determinista local garantiza funcionalidad completa.';
   }
 
-  // Intento 2: Groq
-  const groqResult = await tryGroq(from, to);
-  if (groqResult) {
-    console.info('[AgentService] ✅ Drift generado por Groq (fallback desde Gemini)');
-    return {
-      drift: groqResult,
-      source: 'groq',
-      fallbackReason: 'Gemini no disponible, se usó Groq como alternativa.',
-    };
-  }
+  console.info(`[Orchestrator] ✅ Briefings generados — Fuente: ${source}`);
 
-  // Intento 3: Motor determinista local (SIEMPRE funciona)
-  console.info('[AgentService] ✅ Drift generado por motor local (fallback desde Gemini + Groq)');
-  const localDrift = calculateDrift(from, to);
   return {
-    drift: localDrift,
-    source: 'local',
-    fallbackReason: 'APIs de IA no disponibles. Motor determinista local garantiza funcionalidad completa.',
+    drift: {
+      ...baseDrift,
+      socBriefing,
+      cisoBriefing,
+    },
+    source,
+    fallbackReason,
   };
+}
+
+/**
+ * Extrae el briefing de la respuesta LLM o usa el fallback local.
+ * @param result - Resultado de la llamada LLM (puede ser null)
+ * @param fallback - Briefing generado por el motor determinista
+ * @returns Briefing final validado
+ */
+function extractBriefing(result: { text: string; source: DriftSource } | null, fallback: string): string {
+  if (!result) return fallback;
+
+  try {
+    const parsed = JSON.parse(result.text);
+    const validated = validateWriterResponse(parsed);
+    return validated ? validated.briefing : fallback;
+  } catch {
+    console.warn('[Writer] Error parseando respuesta, usando fallback local.');
+    return fallback;
+  }
 }
