@@ -20,6 +20,42 @@ export interface AgentDriftResult {
   fallbackReason?: string;
 }
 
+/** Campos esperados del LLM */
+interface LLMDriftResponse {
+  headline?: string;
+  socBriefing?: string;
+  cisoBriefing?: string;
+}
+
+/**
+ * Valida que la respuesta parseada del LLM contenga campos string válidos.
+ * Retorna solo los campos que son strings no vacíos.
+ * @param parsed - Objeto parseado del JSON del LLM
+ * @returns Campos validados o null si ninguno es usable
+ */
+function validateLLMResponse(parsed: unknown): LLMDriftResponse | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const obj = parsed as Record<string, unknown>;
+  const result: LLMDriftResponse = {};
+  let hasValidField = false;
+
+  if (typeof obj.headline === 'string' && obj.headline.trim().length > 0) {
+    result.headline = obj.headline.trim();
+    hasValidField = true;
+  }
+  if (typeof obj.socBriefing === 'string' && obj.socBriefing.trim().length > 0) {
+    result.socBriefing = obj.socBriefing.trim();
+    hasValidField = true;
+  }
+  if (typeof obj.cisoBriefing === 'string' && obj.cisoBriefing.trim().length > 0) {
+    result.cisoBriefing = obj.cisoBriefing.trim();
+    hasValidField = true;
+  }
+
+  return hasValidField ? result : null;
+}
+
 /**
  * Intenta generar un drift enriquecido usando la API de Google Gemini.
  * @param from - Snapshot de origen
@@ -37,17 +73,22 @@ async function tryGemini(from: Snapshot, to: Snapshot): Promise<Drift | null> {
     // SIMULACIÓN CHAOS TEST: Descomentar la siguiente línea para simular fallo de Gemini
     // throw new Error("SIMULACIÓN: API de Gemini no responde");
 
-    const prompt = buildPrompt(from, to);
+    const baseDrift = calculateDrift(from, to);
+    const prompt = buildPrompt(baseDrift, from.id, to.id);
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: SYSTEM_PROMPT }],
+          },
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
-            temperature: 0.3,
+            temperature: 0.0,
+            topP: 0.1,
           },
         }),
         signal: AbortSignal.timeout(10000),
@@ -62,14 +103,15 @@ async function tryGemini(from: Snapshot, to: Snapshot): Promise<Drift | null> {
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini: respuesta vacía');
 
-    const enriched = JSON.parse(text) as Partial<Drift>;
-    const baseDrift = calculateDrift(from, to);
+    const parsed = JSON.parse(text);
+    const validated = validateLLMResponse(parsed);
+    if (!validated) throw new Error('Gemini: respuesta JSON no contiene campos válidos');
 
     return {
       ...baseDrift,
-      headline: enriched.headline || baseDrift.headline,
-      socBriefing: enriched.socBriefing || baseDrift.socBriefing,
-      cisoBriefing: enriched.cisoBriefing || baseDrift.cisoBriefing,
+      headline: validated.headline || baseDrift.headline,
+      socBriefing: validated.socBriefing || baseDrift.socBriefing,
+      cisoBriefing: validated.cisoBriefing || baseDrift.cisoBriefing,
     };
   } catch (error) {
     console.warn('[AgentService] Gemini falló:', (error as Error).message);
@@ -94,7 +136,8 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
     // SIMULACIÓN CHAOS TEST: Descomentar la siguiente línea para simular fallo de Groq
     // throw new Error("SIMULACIÓN: API de Groq tampoco responde");
 
-    const prompt = buildPrompt(from, to);
+    const baseDrift = calculateDrift(from, to);
+    const prompt = buildPrompt(baseDrift, from.id, to.id);
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -104,10 +147,11 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'Eres un analista de ciberseguridad experto en respuesta a incidentes. Responde SOLO en JSON válido.' },
+          { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
-        temperature: 0.3,
+        temperature: 0.0,
+        top_p: 0.1,
         response_format: { type: 'json_object' },
       }),
       signal: AbortSignal.timeout(10000),
@@ -121,14 +165,15 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
     const text = data.choices?.[0]?.message?.content;
     if (!text) throw new Error('Groq: respuesta vacía');
 
-    const enriched = JSON.parse(text) as Partial<Drift>;
-    const baseDrift = calculateDrift(from, to);
+    const parsed = JSON.parse(text);
+    const validated = validateLLMResponse(parsed);
+    if (!validated) throw new Error('Groq: respuesta JSON no contiene campos válidos');
 
     return {
       ...baseDrift,
-      headline: enriched.headline || baseDrift.headline,
-      socBriefing: enriched.socBriefing || baseDrift.socBriefing,
-      cisoBriefing: enriched.cisoBriefing || baseDrift.cisoBriefing,
+      headline: validated.headline || baseDrift.headline,
+      socBriefing: validated.socBriefing || baseDrift.socBriefing,
+      cisoBriefing: validated.cisoBriefing || baseDrift.cisoBriefing,
     };
   } catch (error) {
     console.warn('[AgentService] Groq falló:', (error as Error).message);
@@ -136,25 +181,44 @@ async function tryGroq(from: Snapshot, to: Snapshot): Promise<Drift | null> {
   }
 }
 
+/** System prompt compartido para ambos proveedores de IA */
+const SYSTEM_PROMPT = `Eres un analista senior de ciberseguridad especializado en respuesta a incidentes.
+Tu tarea es generar briefings concisos y accionables basados en datos de drift entre snapshots de un incidente.
+
+REGLAS ESTRICTAS:
+- Responde ÚNICAMENTE con un objeto JSON válido.
+- NO incluyas markdown, comentarios, ni texto fuera del JSON.
+- NO inventes datos que no estén en el drift proporcionado.
+- Sé factual, preciso y conciso. Cero especulación.
+- Los briefings deben ser accionables para el rol correspondiente.
+
+SCHEMA DE RESPUESTA (exactamente estos 3 campos, todos string):
+{
+  "headline": "Una línea describiendo el cambio más crítico del drift",
+  "socBriefing": "Briefing técnico para SOC: IOCs, acciones de contención, evidencia nueva",
+  "cisoBriefing": "Briefing ejecutivo para CISO: riesgo de negocio, impacto reputacional, decisiones urgentes"
+}`;
+
 /**
- * Construye el prompt para las APIs de IA.
- * @param from - Snapshot de origen
- * @param to - Snapshot de destino
- * @returns Prompt formateado
+ * Construye el prompt enviando el drift pre-calculado (no los snapshots crudos).
+ * Optimiza tokens enviando solo la información relevante.
+ * @param drift - Drift calculado localmente
+ * @param fromId - ID del snapshot de origen
+ * @param toId - ID del snapshot de destino
+ * @returns Prompt formateado con contexto mínimo necesario
  */
-function buildPrompt(from: Snapshot, to: Snapshot): string {
-  return `Analiza el drift entre estos dos snapshots de un incidente de ciberseguridad y genera un JSON con los campos "headline", "socBriefing" y "cisoBriefing".
+function buildPrompt(drift: Drift, fromId: string, toId: string): string {
+  return `TRANSICIÓN: Snapshot ${fromId} → ${toId}
 
-SNAPSHOT ORIGEN (${from.id}):
-${JSON.stringify(from, null, 2)}
+DRIFT DETECTADO:
+- Headline local: ${drift.headline}
+- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to} (${drift.severityChange.justification})
+- Nuevos hechos confirmados (${drift.newFacts.length}): ${drift.newFacts.map(f => f.description).join('; ')}
+- Nuevos IOCs (${drift.newIOCs.length}): ${drift.newIOCs.map(i => `[${i.type}] ${i.value}`).join('; ')}
+- Giros de confianza (${drift.confidenceShifts.length}): ${drift.confidenceShifts.map(s => `${s.description}: ${s.from}→${s.to}`).join('; ')}
+- Decisión urgente: ${drift.urgentDecision.title} (deadline: ${drift.urgentDecision.deadline})
 
-SNAPSHOT DESTINO (${to.id}):
-${JSON.stringify(to, null, 2)}
-
-Responde ÚNICAMENTE con un objeto JSON válido con estos campos:
-- "headline": string (una línea impactante describiendo el cambio más crítico)
-- "socBriefing": string (briefing técnico para SOC con IOCs, acciones de contención)
-- "cisoBriefing": string (briefing ejecutivo para CISO con riesgo de negocio y decisiones)`;
+Genera el JSON con headline, socBriefing y cisoBriefing basándote EXCLUSIVAMENTE en estos datos.`;
 }
 
 /**
