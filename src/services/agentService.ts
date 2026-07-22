@@ -69,6 +69,7 @@ function getDefaultContext(): RouterContext {
 /**
  * Schema JSON para la respuesta del Agente Enrutador.
  * Fuerza que la API retorne exactamente la estructura esperada.
+ * Incluye propertyOrdering requerido por Gemini 2.0 para determinar orden de generación.
  */
 const ROUTER_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -77,11 +78,13 @@ const ROUTER_RESPONSE_SCHEMA = {
     mitreId: { type: 'STRING', description: 'ID de la táctica MITRE ATT&CK seleccionada del catálogo' },
   },
   required: ['regulationId', 'mitreId'],
+  propertyOrdering: ['regulationId', 'mitreId'],
 } as const;
 
 /**
  * Schema JSON para la respuesta de los Agentes Redactores (SOC/CISO).
  * Fuerza que la API retorne un objeto con campo briefing obligatorio.
+ * Incluye propertyOrdering requerido por Gemini 2.0.
  */
 const WRITER_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -89,6 +92,7 @@ const WRITER_RESPONSE_SCHEMA = {
     briefing: { type: 'STRING', description: 'Texto del briefing generado para el rol correspondiente' },
   },
   required: ['briefing'],
+  propertyOrdering: ['briefing'],
 } as const;
 
 /**
