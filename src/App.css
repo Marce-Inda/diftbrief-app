@@ -135,6 +135,7 @@ body {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   font-weight: 700;
+  animation: urgencyPulse 2s ease-in-out infinite;
 }
 
 .incident-card__title {
@@ -298,13 +299,15 @@ body {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
-  animation: fadeIn 0.3s ease;
+  animation: smoothTabIn 0.3s ease;
 }
 
 .comparison-panel__column {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+  opacity: 1;
+  transition: opacity 0.3s ease;
 }
 
 .comparison-panel__divider {
@@ -422,22 +425,44 @@ body {
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   border-left: 3px solid var(--color-border-subtle);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.delta-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(91, 192, 235, 0.15);
 }
 
 .delta-card--drift {
   border-left-color: var(--color-drift);
 }
 
+.delta-card--drift:hover {
+  box-shadow: 0 4px 12px rgba(91, 192, 235, 0.2);
+}
+
 .delta-card--confirmed {
   border-left-color: var(--color-confirmed);
+}
+
+.delta-card--confirmed:hover {
+  box-shadow: 0 4px 12px rgba(63, 185, 80, 0.2);
 }
 
 .delta-card--critical {
   border-left-color: var(--color-critical);
 }
 
+.delta-card--critical:hover {
+  box-shadow: 0 4px 12px rgba(248, 81, 73, 0.2);
+}
+
 .delta-card--probable {
   border-left-color: var(--color-probable);
+}
+
+.delta-card--probable:hover {
+  box-shadow: 0 4px 12px rgba(245, 165, 36, 0.2);
 }
 
 .delta-card__header {
@@ -524,6 +549,12 @@ body {
   border: 1px solid var(--color-decision);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.decision-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 209, 102, 0.2);
 }
 
 .decision-card__header {
@@ -550,6 +581,7 @@ body {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   font-weight: 600;
+  animation: urgencyPulse 2s ease-in-out infinite;
 }
 
 .decision-card__body {
@@ -716,6 +748,28 @@ body {
   50% { opacity: 0.4; }
 }
 
+@keyframes urgencyPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.03);
+  }
+}
+
+@keyframes smoothTabIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* === Role Content Transition === */
 .app__role-content {
   display: flex;
@@ -771,6 +825,12 @@ body {
   border: 1px solid var(--color-decision);
   border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.impact-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 209, 102, 0.2);
 }
 
 .impact-card__header {
