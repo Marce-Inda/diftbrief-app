@@ -1,6 +1,11 @@
 # Include .kiro config (Kiro IDE steering, hooks, specs)
 !.kiro/
 
+# Environment variables (API keys, secrets)
+.env
+.env.local
+.env.*.local
+
 # Logs
 logs
 *.log

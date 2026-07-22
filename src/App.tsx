@@ -3,9 +3,11 @@
  * Integra todos los componentes y gestiona el estado de la aplicación.
  */
 
-import { useState, useMemo } from 'react';
-import type { TransitionId, UserRole, Snapshot } from './types';
+import { useState, useMemo, useEffect } from 'react';
+import type { TransitionId, UserRole, Snapshot, Drift } from './types';
 import { calculateDrift } from './services/driftComparator';
+import { getAgentDrift } from './services/agentService';
+import type { DriftSource } from './services/agentService';
 import { Header } from './components/Header';
 import { IncidentCard } from './components/IncidentCard';
 import { SnapshotSelector } from './components/SnapshotSelector';
@@ -36,9 +38,33 @@ function App() {
     return { fromSnapshot: from!, toSnapshot: to! };
   }, [activeTransition]);
 
-  const drift = useMemo(() => {
+  // Drift inmediato del motor local (garantiza renderizado instantáneo)
+  const localDrift = useMemo(() => {
     return calculateDrift(fromSnapshot, toSnapshot);
   }, [fromSnapshot, toSnapshot]);
+
+  // Estado del drift enriquecido por IA (async con fallback)
+  const [drift, setDrift] = useState<Drift>(localDrift);
+  const [driftSource, setDriftSource] = useState<DriftSource>('local');
+  const [fallbackReason, setFallbackReason] = useState<string | undefined>();
+
+  useEffect(() => {
+    // Primero renderizamos con el local, luego intentamos enriquecer con IA
+    setDrift(localDrift);
+    setDriftSource('local');
+    setFallbackReason(undefined);
+
+    let cancelled = false;
+    getAgentDrift(fromSnapshot, toSnapshot).then((result) => {
+      if (!cancelled) {
+        setDrift(result.drift);
+        setDriftSource(result.source);
+        setFallbackReason(result.fallbackReason);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [fromSnapshot, toSnapshot, localDrift]);
 
   const filteredActions = useMemo(() => {
     return drift.recommendedActions
@@ -66,9 +92,27 @@ function App() {
 
         <DriftBanner headline={drift.headline} />
 
+        {/* Indicador de fuente del drift (para chaos testing) */}
+        <div className="app__drift-source" style={{
+          padding: '0.5rem 1rem',
+          borderRadius: '6px',
+          fontSize: '0.8rem',
+          background: driftSource === 'gemini' ? 'var(--color-confirmed)' :
+                     driftSource === 'groq' ? 'var(--color-probable)' :
+                     'var(--color-drift)',
+          color: 'var(--color-bg-base)',
+          fontWeight: 600,
+          display: 'inline-block',
+          marginBottom: '1rem',
+        }}>
+          🔌 Fuente: {driftSource.toUpperCase()}
+          {fallbackReason && ` — ${fallbackReason}`}
+        </div>
+
         <ComparisonPanel
           fromSnapshot={fromSnapshot}
           toSnapshot={toSnapshot}
+          activeRole={activeRole}
         />
 
         <section className="app__deltas">
