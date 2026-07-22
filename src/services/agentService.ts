@@ -1,13 +1,14 @@
 /**
  * @fileoverview Sistema Multi-Agente RAG para generación de briefings.
- * Arquitectura: Agente Enrutador → Agentes Redactores (SOC + CISO) en paralelo.
- * Cadena de fallback por agente: Gemini → Groq → Motor Determinista Local.
+ * Arquitectura: Enrutador Local (Fuse.js) → Agentes Redactores (SOC + CISO) en paralelo.
+ * El enrutador usa búsqueda difusa in-browser (latencia ~0ms) en lugar de LLM.
+ * Cadena de fallback para redactores: Gemini → Groq → Motor Determinista Local.
  * Garantiza resiliencia 100% y cero alucinaciones mediante grounding en Knowledge Base.
  */
 
 import type { Snapshot, Drift, Regulation, MitreAttackTactic, IncidentPlaybook } from '../types';
 import { calculateDrift } from './driftComparator';
-import { SECURITY_KNOWLEDGE_BASE } from './knowledgeBase';
+import { routeContextLocally } from './localRouter';
 
 /** Fuente que generó el drift */
 export type DriftSource = 'gemini' | 'groq' | 'local';
@@ -32,54 +33,12 @@ interface RouterContext {
   playbooks: IncidentPlaybook[];
 }
 
-/** Respuesta esperada del Agente Enrutador */
-interface RouterResponse {
-  regulationId: string;
-  mitreId: string;
-}
-
 /** Respuesta esperada de un Agente Redactor */
 interface WriterResponse {
   briefing: string;
 }
 
-// ─── Contexto por Defecto (Fallback) ─────────────────────────────────────────
-
-/** IDs por defecto cuando el enrutador falla o alucina */
-const DEFAULT_REGULATION_ID = 'nis2';
-const DEFAULT_MITRE_ID = 'TA0010';
-
-/**
- * Obtiene el contexto por defecto cuando el enrutador falla.
- * Garantiza que el flujo nunca se rompa.
- * @returns Contexto con regulación NIS2 y táctica Exfiltration
- */
-function getDefaultContext(): RouterContext {
-  const regulation = SECURITY_KNOWLEDGE_BASE.regulations.find(r => r.id === DEFAULT_REGULATION_ID)!;
-  const mitreTactic = SECURITY_KNOWLEDGE_BASE.frameworks.find(f => f.id === DEFAULT_MITRE_ID)!;
-  return {
-    regulation,
-    mitreTactic,
-    playbooks: SECURITY_KNOWLEDGE_BASE.playbooks,
-  };
-}
-
 // ─── Structured Output Schemas (JSON Schema) ─────────────────────────────────
-
-/**
- * Schema JSON para la respuesta del Agente Enrutador.
- * Fuerza que la API retorne exactamente la estructura esperada.
- * Incluye propertyOrdering requerido por Gemini 2.0 para determinar orden de generación.
- */
-const ROUTER_RESPONSE_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    regulationId: { type: 'STRING', description: 'ID de la regulación seleccionada del catálogo' },
-    mitreId: { type: 'STRING', description: 'ID de la táctica MITRE ATT&CK seleccionada del catálogo' },
-  },
-  required: ['regulationId', 'mitreId'],
-  propertyOrdering: ['regulationId', 'mitreId'],
-} as const;
 
 /**
  * Schema JSON para la respuesta de los Agentes Redactores (SOC/CISO).
@@ -94,27 +53,6 @@ const WRITER_RESPONSE_SCHEMA = {
   required: ['briefing'],
   propertyOrdering: ['briefing'],
 } as const;
-
-/**
- * Schema JSON para Groq (formato OpenAI json_schema).
- * Estructura compatible con la API de Groq/OpenAI.
- */
-const GROQ_ROUTER_SCHEMA = {
-  type: 'json_schema' as const,
-  json_schema: {
-    name: 'router_response',
-    strict: true,
-    schema: {
-      type: 'object',
-      properties: {
-        regulationId: { type: 'string', description: 'ID de la regulación seleccionada del catálogo' },
-        mitreId: { type: 'string', description: 'ID de la táctica MITRE ATT&CK seleccionada del catálogo' },
-      },
-      required: ['regulationId', 'mitreId'],
-      additionalProperties: false,
-    },
-  },
-};
 
 const GROQ_WRITER_SCHEMA = {
   type: 'json_schema' as const,
@@ -132,24 +70,18 @@ const GROQ_WRITER_SCHEMA = {
   },
 };
 
-/** Tipo de agente para seleccionar el schema correcto */
-type AgentType = 'router' | 'writer';
-
-// ─── Utilidades de Llamada LLM ────────────────────────────────────────────────
+// ─── Utilidades de Llamada LLM (Solo Agentes Redactores) ──────────────────────
 
 /**
  * Ejecuta una llamada a Gemini con structured output nativo (responseSchema).
  * El schema fuerza matemáticamente la estructura de la respuesta a nivel de API.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
- * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta parseado o null si falla
  */
-async function callGemini(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<string | null> {
+async function callGemini(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return null;
-
-  const responseSchema = agentType === 'router' ? ROUTER_RESPONSE_SCHEMA : WRITER_RESPONSE_SCHEMA;
 
   try {
     const response = await fetch(
@@ -162,7 +94,7 @@ async function callGemini(systemPrompt: string, userPrompt: string, agentType: A
           contents: [{ parts: [{ text: userPrompt }] }],
           generationConfig: {
             responseMimeType: 'application/json',
-            responseSchema,
+            responseSchema: WRITER_RESPONSE_SCHEMA,
             temperature: 0.0,
             topP: 0.1,
           },
@@ -187,14 +119,11 @@ async function callGemini(systemPrompt: string, userPrompt: string, agentType: A
  * El schema fuerza que la respuesta cumpla exactamente la estructura definida.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
- * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta parseado o null si falla
  */
-async function callGroq(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<string | null> {
+async function callGroq(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
   if (!apiKey) return null;
-
-  const responseFormat = agentType === 'router' ? GROQ_ROUTER_SCHEMA : GROQ_WRITER_SCHEMA;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -211,7 +140,7 @@ async function callGroq(systemPrompt: string, userPrompt: string, agentType: Age
         ],
         temperature: 0.0,
         top_p: 0.1,
-        response_format: responseFormat,
+        response_format: GROQ_WRITER_SCHEMA,
       }),
       signal: AbortSignal.timeout(10000),
     });
@@ -228,135 +157,37 @@ async function callGroq(systemPrompt: string, userPrompt: string, agentType: Age
 }
 
 /**
- * Ejecuta una llamada LLM con fallback Gemini → Groq, usando structured outputs nativos.
+ * Ejecuta una llamada LLM con fallback Gemini → Groq para agentes redactores.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
- * @param agentType - Tipo de agente para seleccionar el schema correcto
  * @returns Texto de respuesta o null si ambos fallan
  */
-async function callLLM(systemPrompt: string, userPrompt: string, agentType: AgentType): Promise<{ text: string; source: DriftSource } | null> {
-  const geminiResult = await callGemini(systemPrompt, userPrompt, agentType);
+async function callWriterLLM(systemPrompt: string, userPrompt: string): Promise<{ text: string; source: DriftSource } | null> {
+  const geminiResult = await callGemini(systemPrompt, userPrompt);
   if (geminiResult) return { text: geminiResult, source: 'gemini' };
 
-  const groqResult = await callGroq(systemPrompt, userPrompt, agentType);
+  const groqResult = await callGroq(systemPrompt, userPrompt);
   if (groqResult) return { text: groqResult, source: 'groq' };
 
   return null;
 }
 
-// ─── Agente 1: Enrutador de Contexto ──────────────────────────────────────────
-
-const ROUTER_SYSTEM_PROMPT = `Eres un enrutador de contexto especializado en ciberseguridad.
-Tu tarea es analizar un drift de incidente y seleccionar la regulación y táctica MITRE ATT&CK más relevantes.
-
-REGLAS ESTRICTAS:
-- Responde ÚNICAMENTE con un objeto JSON válido.
-- NO incluyas markdown, comentarios, ni texto fuera del JSON.
-- Selecciona exactamente 1 regulación y 1 táctica MITRE del catálogo proporcionado.
-- Basa tu selección en la naturaleza del incidente y los datos exfiltrados/comprometidos.
-
-DIRECTIVAS CONSTITUCIONALES (ANTI-ALUCINACIÓN):
-- SOLO puedes seleccionar IDs que existan LITERALMENTE en el catálogo proporcionado.
-- NO inventes IDs de regulaciones ni tácticas que no aparezcan en la lista.
-- Si no encuentras una coincidencia perfecta, selecciona la más cercana del catálogo disponible.
-- Tu respuesta está restringida al universo cerrado de opciones proporcionadas.
-
-SCHEMA DE RESPUESTA:
-{
-  "regulationId": "id_de_la_regulacion_seleccionada",
-  "mitreId": "id_de_la_tactica_seleccionada"
-}`;
+// ─── Agente Enrutador Local (Fuse.js + Keywords) ──────────────────────────────
 
 /**
- * Construye el prompt para el Agente Enrutador con las llaves disponibles.
- * @param drift - Drift calculado localmente
- * @returns Prompt con contexto del drift y catálogo de IDs disponibles
- */
-function buildRouterPrompt(drift: Drift): string {
-  const regulationCatalog = SECURITY_KNOWLEDGE_BASE.regulations
-    .map(r => `- ${r.id}: ${r.name} (${r.jurisdiction}, ${r.scope})`)
-    .join('\n');
-
-  const mitreCatalog = SECURITY_KNOWLEDGE_BASE.frameworks
-    .map(f => `- ${f.id}: ${f.name} — ${f.description}`)
-    .join('\n');
-
-  return `DRIFT DEL INCIDENTE:
-- Headline: ${drift.headline}
-- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to}
-- Nuevos IOCs: ${drift.newIOCs.map(i => `[${i.type}] ${i.value}`).join(', ') || 'Ninguno'}
-- Nuevos hechos: ${drift.newFacts.map(f => f.description).join('; ') || 'Ninguno'}
-- Decisión urgente: ${drift.urgentDecision.title}
-- Activos impactados (inferidos): infraestructura electoral, base de datos de padrón
-
-CATÁLOGO DE REGULACIONES DISPONIBLES:
-${regulationCatalog}
-
-CATÁLOGO DE TÁCTICAS MITRE ATT&CK DISPONIBLES:
-${mitreCatalog}
-
-Selecciona la regulación y táctica MITRE más relevantes para este incidente.`;
-}
-
-/**
- * Valida que los IDs devueltos por el enrutador existan en la Knowledge Base.
- * @param parsed - Respuesta parseada del enrutador
- * @returns IDs validados o null si son inválidos
- */
-function validateRouterResponse(parsed: unknown): RouterResponse | null {
-  if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as Record<string, unknown>;
-
-  if (typeof obj.regulationId !== 'string' || typeof obj.mitreId !== 'string') return null;
-
-  const regulationExists = SECURITY_KNOWLEDGE_BASE.regulations.some(r => r.id === obj.regulationId);
-  const mitreExists = SECURITY_KNOWLEDGE_BASE.frameworks.some(f => f.id === obj.mitreId);
-
-  if (!regulationExists || !mitreExists) {
-    console.warn(`[Router] IDs alucinados: regulation=${obj.regulationId}(${regulationExists}), mitre=${obj.mitreId}(${mitreExists})`);
-    return null;
-  }
-
-  return { regulationId: obj.regulationId as string, mitreId: obj.mitreId as string };
-}
-
-/**
- * Agente 1: Enrutador de Contexto.
- * Analiza el drift y selecciona la regulación y táctica MITRE más relevantes.
+ * Agente 1: Enrutador de Contexto (Local RAG - Latencia Cero).
+ * Usa búsqueda difusa local (Fuse.js + keyword matching) en lugar de LLM.
+ * Elimina la latencia de red (~1-3s) y el consumo de tokens del enrutador anterior.
  * @param drift - Drift calculado localmente
  * @returns Contexto enrutado con objetos completos de la Knowledge Base
  */
-async function getIncidentContext(drift: Drift): Promise<RouterContext> {
-  const prompt = buildRouterPrompt(drift);
-  const llmResult = await callLLM(ROUTER_SYSTEM_PROMPT, prompt, 'router');
-
-  if (!llmResult) {
-    console.warn('[Router] Ambas APIs fallaron, usando contexto por defecto.');
-    return getDefaultContext();
-  }
-
-  try {
-    const parsed = JSON.parse(llmResult.text);
-    const validated = validateRouterResponse(parsed);
-
-    if (!validated) {
-      console.warn('[Router] Respuesta inválida o IDs inexistentes, usando contexto por defecto.');
-      return getDefaultContext();
-    }
-
-    const regulation = SECURITY_KNOWLEDGE_BASE.regulations.find(r => r.id === validated.regulationId)!;
-    const mitreTactic = SECURITY_KNOWLEDGE_BASE.frameworks.find(f => f.id === validated.mitreId)!;
-
-    console.info(`[Router] ✅ Contexto enrutado: ${regulation.name} + ${mitreTactic.name}`);
-    return {
-      regulation,
-      mitreTactic,
-      playbooks: SECURITY_KNOWLEDGE_BASE.playbooks,
-    };
-  } catch (error) {
-    console.warn('[Router] Error parseando respuesta:', (error as Error).message);
-    return getDefaultContext();
-  }
+function getIncidentContext(drift: Drift): RouterContext {
+  const localContext = routeContextLocally(drift);
+  return {
+    regulation: localContext.regulation,
+    mitreTactic: localContext.mitreTactic,
+    playbooks: localContext.playbooks,
+  };
 }
 
 // ─── Agente 2: Redactor SOC ──────────────────────────────────────────────────
@@ -504,17 +335,19 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   // Paso 1: Calcular drift base con motor determinista (siempre funciona)
   const baseDrift = calculateDrift(from, to);
 
-  // Paso 2: Agente Enrutador selecciona contexto de la Knowledge Base
-  const context = await getIncidentContext(baseDrift);
-  console.info(`[Orchestrator] Contexto: ${context.regulation.name} + ${context.mitreTactic.name}`);
+  // Paso 2: Enrutador Local selecciona contexto de la Knowledge Base (latencia ~0ms)
+  const routerStart = performance.now();
+  const context = getIncidentContext(baseDrift);
+  const routerMs = (performance.now() - routerStart).toFixed(2);
+  console.info(`[Orchestrator] Contexto enrutado localmente en ${routerMs}ms: ${context.regulation.name} + ${context.mitreTactic.name}`);
 
   // Paso 3: Agentes Redactores en paralelo (SOC + CISO)
   const socPrompt = buildSOCPrompt(baseDrift, context.mitreTactic, context.playbooks);
   const cisoPrompt = buildCISOPrompt(baseDrift, context.regulation);
 
   const [socResult, cisoResult] = await Promise.all([
-    callLLM(SOC_WRITER_SYSTEM_PROMPT, socPrompt, 'writer'),
-    callLLM(CISO_WRITER_SYSTEM_PROMPT, cisoPrompt, 'writer'),
+    callWriterLLM(SOC_WRITER_SYSTEM_PROMPT, socPrompt),
+    callWriterLLM(CISO_WRITER_SYSTEM_PROMPT, cisoPrompt),
   ]);
 
   // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
