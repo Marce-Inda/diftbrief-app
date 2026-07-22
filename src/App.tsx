@@ -3,7 +3,7 @@
  * Integra todos los componentes y gestiona el estado de la aplicación.
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import type { TransitionId, UserRole, Snapshot, Drift } from './types';
 import { calculateDrift } from './services/driftComparator';
 import { getAgentDrift } from './services/agentService';
@@ -12,14 +12,16 @@ import { Header } from './components/Header';
 import { IncidentCard } from './components/IncidentCard';
 import { SnapshotSelector } from './components/SnapshotSelector';
 import { DriftBanner } from './components/DriftBanner';
-import { ComparisonPanel } from './components/ComparisonPanel';
 import { DeltaCard } from './components/DeltaCard';
 import { DecisionCard } from './components/DecisionCard';
 import { RoleSwitcher } from './components/RoleSwitcher';
-import { BriefExportPanel } from './components/BriefExportPanel';
 import snapshotsData from './data/snapshots.json';
 import './styles/tokens.css';
 import './App.css';
+
+// Lazy-loaded panels (code-split into separate chunks)
+const ComparisonPanel = lazy(() => import('./components/ComparisonPanel').then(m => ({ default: m.ComparisonPanel })));
+const BriefExportPanel = lazy(() => import('./components/BriefExportPanel').then(m => ({ default: m.BriefExportPanel })));
 
 const snapshots: Snapshot[] = snapshotsData as Snapshot[];
 
@@ -47,12 +49,14 @@ function App() {
   const [drift, setDrift] = useState<Drift>(localDrift);
   const [driftSource, setDriftSource] = useState<DriftSource>('local');
   const [fallbackReason, setFallbackReason] = useState<string | undefined>();
+  const [isEnriching, setIsEnriching] = useState(false);
 
   useEffect(() => {
     // Primero renderizamos con el local, luego intentamos enriquecer con IA
     setDrift(localDrift);
     setDriftSource('local');
     setFallbackReason(undefined);
+    setIsEnriching(true);
 
     let cancelled = false;
     getAgentDrift(fromSnapshot, toSnapshot).then((result) => {
@@ -60,6 +64,7 @@ function App() {
         setDrift(result.drift);
         setDriftSource(result.source);
         setFallbackReason(result.fallbackReason);
+        setIsEnriching(false);
       }
     });
 
@@ -97,23 +102,29 @@ function App() {
           padding: '0.5rem 1rem',
           borderRadius: '6px',
           fontSize: '0.8rem',
-          background: driftSource === 'gemini' ? 'var(--color-confirmed)' :
+          background: isEnriching ? 'var(--color-border-subtle)' :
+                     driftSource === 'gemini' ? 'var(--color-confirmed)' :
                      driftSource === 'groq' ? 'var(--color-probable)' :
                      'var(--color-drift)',
-          color: 'var(--color-bg-base)',
+          color: isEnriching ? 'var(--color-text-secondary)' : 'var(--color-bg-base)',
           fontWeight: 600,
           display: 'inline-block',
           marginBottom: '1rem',
+          transition: 'background 0.3s ease',
         }}>
-          🔌 Fuente: {driftSource.toUpperCase()}
-          {fallbackReason && ` — ${fallbackReason}`}
+          {isEnriching
+            ? '⏳ Consultando agente IA...'
+            : `🔌 Fuente: ${driftSource.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
+          }
         </div>
 
-        <ComparisonPanel
-          fromSnapshot={fromSnapshot}
-          toSnapshot={toSnapshot}
-          activeRole={activeRole}
-        />
+        <Suspense fallback={<div style={{ padding: '1rem', color: 'var(--color-text-muted)' }}>Cargando panel...</div>}>
+          <ComparisonPanel
+            fromSnapshot={fromSnapshot}
+            toSnapshot={toSnapshot}
+            activeRole={activeRole}
+          />
+        </Suspense>
 
         <section className="app__deltas">
           <DeltaCard
@@ -153,11 +164,13 @@ function App() {
           </ol>
         </section>
 
-        <BriefExportPanel
-          socBriefing={drift.socBriefing}
-          cisoBriefing={drift.cisoBriefing}
-          activeRole={activeRole}
-        />
+        <Suspense fallback={<div style={{ padding: '1rem', color: 'var(--color-text-muted)' }}>Cargando exportación...</div>}>
+          <BriefExportPanel
+            socBriefing={drift.socBriefing}
+            cisoBriefing={drift.cisoBriefing}
+            activeRole={activeRole}
+          />
+        </Suspense>
       </main>
     </div>
   );
