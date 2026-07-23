@@ -23,6 +23,16 @@ export interface UseAgentDriftResult {
   telemetry?: TelemetryData;
 }
 
+/** Internal enrichment result from the agent */
+interface EnrichmentResult {
+  drift: Drift;
+  source: DriftSource;
+  fallbackReason: string | undefined;
+  telemetry: TelemetryData | undefined;
+  /** Identifier to correlate this result with the snapshots that triggered it */
+  key: string;
+}
+
 /**
  * Hook que calcula el drift entre dos snapshots usando la cadena de fallback.
  * Renderiza inmediatamente con el motor local y enriquece de forma async con IA.
@@ -33,32 +43,36 @@ export interface UseAgentDriftResult {
 export function useAgentDrift(from: Snapshot, to: Snapshot): UseAgentDriftResult {
   const localDrift = useMemo(() => calculateDrift(from, to), [from, to]);
 
-  const [drift, setDrift] = useState<Drift>(localDrift);
-  const [source, setSource] = useState<DriftSource>('local');
-  const [fallbackReason, setFallbackReason] = useState<string | undefined>();
-  const [isEnriching, setIsEnriching] = useState(false);
-  const [telemetry, setTelemetry] = useState<TelemetryData | undefined>();
+  // Unique key derived from snapshot identities to detect when inputs change
+  const snapshotKey = `${from.id}-${to.id}`;
+
+  const [enrichment, setEnrichment] = useState<EnrichmentResult | null>(null);
 
   useEffect(() => {
-    setDrift(localDrift);
-    setSource('local');
-    setFallbackReason(undefined);
-    setTelemetry(undefined);
-    setIsEnriching(true);
-
     let cancelled = false;
     getAgentDrift(from, to).then((result) => {
       if (!cancelled) {
-        setDrift(result.drift);
-        setSource(result.source);
-        setFallbackReason(result.fallbackReason);
-        setTelemetry(result.telemetry);
-        setIsEnriching(false);
+        setEnrichment({
+          drift: result.drift,
+          source: result.source,
+          fallbackReason: result.fallbackReason,
+          telemetry: result.telemetry,
+          key: snapshotKey,
+        });
       }
     });
 
     return () => { cancelled = true; };
-  }, [from, to, localDrift]);
+  }, [from, to, snapshotKey]);
 
-  return { drift, source, fallbackReason, isEnriching, telemetry };
+  // Derive output: if enrichment matches current snapshots, use it; otherwise use local
+  const isEnriched = enrichment !== null && enrichment.key === snapshotKey;
+
+  return {
+    drift: isEnriched ? enrichment.drift : localDrift,
+    source: isEnriched ? enrichment.source : 'local',
+    fallbackReason: isEnriched ? enrichment.fallbackReason : undefined,
+    isEnriching: !isEnriched,
+    telemetry: isEnriched ? enrichment.telemetry : undefined,
+  };
 }

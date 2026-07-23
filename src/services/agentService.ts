@@ -954,7 +954,7 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   ]);
 
   // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
-  let source: DriftSource = 'local';
+  let source: DriftSource;
   let fallbackReason: string | undefined;
   let telemetry: TelemetryData | undefined;
 
