@@ -4,8 +4,9 @@
  */
 
 import { useState, useMemo, lazy, Suspense } from 'react';
-import type { TransitionId, UserRole, Snapshot } from './types';
+import type { TransitionId, UserRole, Snapshot, TelemetryData } from './types';
 import { useAgentDrift } from './hooks/useAgentDrift';
+import { useTelemetryToggle } from './hooks/useTelemetryToggle';
 import { Header } from './components/Header';
 import { IncidentCard } from './components/IncidentCard';
 import { SnapshotSelector } from './components/SnapshotSelector';
@@ -20,6 +21,7 @@ import './App.css';
 // Lazy-loaded panels (code-split into separate chunks)
 const ComparisonPanel = lazy(() => import('./components/ComparisonPanel').then(m => ({ default: m.ComparisonPanel })));
 const BriefExportPanel = lazy(() => import('./components/BriefExportPanel').then(m => ({ default: m.BriefExportPanel })));
+const TelemetryPanel = lazy(() => import('./components/TelemetryPanel').then(m => ({ default: m.TelemetryPanel })));
 
 const snapshots: Snapshot[] = snapshotsData as Snapshot[];
 
@@ -38,7 +40,15 @@ function App() {
     return { fromSnapshot: from!, toSnapshot: to! };
   }, [activeTransition]);
 
-  const { drift, source, fallbackReason, isEnriching } = useAgentDrift(fromSnapshot, toSnapshot);
+  const { drift, source, fallbackReason, isEnriching, telemetry } = useAgentDrift(fromSnapshot, toSnapshot);
+  const { isVisible } = useTelemetryToggle();
+  const telemetryEnabled = import.meta.env.VITE_SHOW_TELEMETRY === 'true';
+
+  const telemetryData: TelemetryData = telemetry ?? {
+    tokensConsumed: null,
+    latencyMs: null,
+    estimatedCost: null,
+  };
 
   const filteredActions = useMemo(() => {
     return drift.recommendedActions
@@ -131,6 +141,12 @@ function App() {
           />
         </Suspense>
       </main>
+
+      {telemetryEnabled && isVisible && (
+        <Suspense fallback={null}>
+          <TelemetryPanel data={telemetryData} />
+        </Suspense>
+      )}
     </div>
   );
 }

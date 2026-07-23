@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import type { Snapshot, Drift } from '../types';
+import type { Snapshot, Drift, TelemetryData } from '../types';
 import { calculateDrift } from '../services/driftComparator';
 import { getAgentDrift } from '../services/agentService';
 import type { DriftSource } from '../services/agentService';
@@ -19,6 +19,8 @@ export interface UseAgentDriftResult {
   fallbackReason: string | undefined;
   /** Si el agente está consultando APIs de IA */
   isEnriching: boolean;
+  /** Datos de telemetría de la última llamada al agente (undefined antes de la primera respuesta o cuando se usa fallback local) */
+  telemetry?: TelemetryData;
 }
 
 /**
@@ -35,11 +37,13 @@ export function useAgentDrift(from: Snapshot, to: Snapshot): UseAgentDriftResult
   const [source, setSource] = useState<DriftSource>('local');
   const [fallbackReason, setFallbackReason] = useState<string | undefined>();
   const [isEnriching, setIsEnriching] = useState(false);
+  const [telemetry, setTelemetry] = useState<TelemetryData | undefined>();
 
   useEffect(() => {
     setDrift(localDrift);
     setSource('local');
     setFallbackReason(undefined);
+    setTelemetry(undefined);
     setIsEnriching(true);
 
     let cancelled = false;
@@ -48,6 +52,7 @@ export function useAgentDrift(from: Snapshot, to: Snapshot): UseAgentDriftResult
         setDrift(result.drift);
         setSource(result.source);
         setFallbackReason(result.fallbackReason);
+        setTelemetry(result.telemetry);
         setIsEnriching(false);
       }
     });
@@ -55,5 +60,5 @@ export function useAgentDrift(from: Snapshot, to: Snapshot): UseAgentDriftResult
     return () => { cancelled = true; };
   }, [from, to, localDrift]);
 
-  return { drift, source, fallbackReason, isEnriching };
+  return { drift, source, fallbackReason, isEnriching, telemetry };
 }

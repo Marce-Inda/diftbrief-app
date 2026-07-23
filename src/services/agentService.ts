@@ -6,7 +6,7 @@
  * Garantiza resiliencia 100% y cero alucinaciones mediante grounding en Knowledge Base.
  */
 
-import type { Snapshot, Drift, Regulation, MitreAttackTactic, IncidentPlaybook } from '../types';
+import type { Snapshot, Drift, Regulation, MitreAttackTactic, IncidentPlaybook, TelemetryData } from '../types';
 import { calculateDrift } from './driftComparator';
 import { routeContextLocally } from './localRouter';
 import { queryThreatIntelligence, queryRegulatoryPrecedents } from './tools';
@@ -22,6 +22,8 @@ export interface AgentDriftResult {
   source: DriftSource;
   /** Mensaje de fallback si aplica */
   fallbackReason?: string;
+  /** Datos de telemetría de la última llamada a la API (undefined si se usó fallback local) */
+  telemetry?: TelemetryData;
 }
 
 /** Contexto seleccionado por el Agente Enrutador */
@@ -172,26 +174,51 @@ const GROQ_WRITER_SCHEMA = {
   },
 };
 
+// ─── Telemetry Metadata Types ─────────────────────────────────────────────────
+
+/** Approximate token pricing per token (USD) for cost estimation */
+const GEMINI_COST_PER_TOKEN = 0.00001;
+const GROQ_COST_PER_TOKEN = 0.000001;
+
+/** Internal metadata captured from a single LLM API call */
+interface LLMCallMetadata {
+  /** Round-trip latency in milliseconds */
+  latencyMs: number;
+  /** Total tokens consumed (prompt + completion), null if unavailable */
+  tokensConsumed: number | null;
+}
+
+/** Result from an LLM call including response text and telemetry metadata */
+interface LLMCallResult {
+  /** Response text (may be JSON stringified function call) */
+  text: string;
+  /** Telemetry metadata from the API call */
+  metadata: LLMCallMetadata;
+}
+
 // ─── Utilidades de Llamada LLM (Solo Agentes Redactores) ──────────────────────
 
 /**
  * Ejecuta una llamada a Gemini con structured output nativo (responseSchema) o con tool calling.
  * Cuando se proporcionan tool declarations, el modo structured output se desactiva
  * (son mutuamente excluyentes en Gemini) y se habilita el tool calling.
+ * Captures response timing and token usage metadata for telemetry.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
  * @param toolDeclarations - Declaraciones de funciones opcionales para tool calling
  * @param _toolRegistry - Registro de herramientas (reservado para uso futuro en el ReAct loop)
- * @returns Texto de respuesta parseado, indicador JSON de functionCall, o null si falla
+ * @returns LLMCallResult with text and metadata, or null si falla
  */
 async function callGemini(
   systemPrompt: string,
   userPrompt: string,
   toolDeclarations?: GeminiFunctionDeclaration[],
   _toolRegistry?: ToolRegistry
-): Promise<string | null> {
+): Promise<LLMCallResult | null> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return null;
+
+  const startTime = Date.now();
 
   try {
     // Build generationConfig: exclude structured output fields when tools are present
@@ -230,6 +257,15 @@ async function callGemini(
 
     if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
     const data = await response.json();
+    const latencyMs = Date.now() - startTime;
+
+    // Extract token usage from Gemini response metadata
+    const tokensConsumed: number | null =
+      typeof data.usageMetadata?.totalTokenCount === 'number'
+        ? data.usageMetadata.totalTokenCount
+        : null;
+
+    const metadata: LLMCallMetadata = { latencyMs, tokensConsumed };
 
     // Detect functionCall in response parts
     const functionCall = data.candidates?.[0]?.content?.parts?.[0]?.functionCall;
@@ -240,19 +276,22 @@ async function callGemini(
         // Try to extract text from other parts
         const parts = data.candidates?.[0]?.content?.parts || [];
         const textPart = parts.find((p: Record<string, unknown>) => p.text);
-        if (textPart?.text) return textPart.text as string;
+        if (textPart?.text) return { text: textPart.text as string, metadata };
         return null;
       }
-      return JSON.stringify({
-        __functionCall: true,
-        name: functionCall.name,
-        args: functionCall.args || {},
-      });
+      return {
+        text: JSON.stringify({
+          __functionCall: true,
+          name: functionCall.name,
+          args: functionCall.args || {},
+        }),
+        metadata,
+      };
     }
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini: respuesta vacía');
-    return text;
+    return { text, metadata };
   } catch (error) {
     console.warn('[Multi-Agent] Gemini falló:', (error as Error).message);
     return null;
@@ -263,20 +302,23 @@ async function callGemini(
  * Ejecuta una llamada a Groq con structured output nativo (json_schema strict mode) o con tool calling.
  * Cuando se proporcionan tool definitions, el modo structured output se desactiva
  * (son mutuamente excluyentes en Groq) y se habilita el tool calling.
+ * Captures response timing and token usage metadata for telemetry.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
  * @param toolDefinitions - Definiciones de herramientas opcionales para tool calling (formato OpenAI)
  * @param _toolRegistry - Registro de herramientas (reservado para uso futuro en el ReAct loop)
- * @returns Texto de respuesta parseado, indicador JSON de functionCall, o null si falla
+ * @returns LLMCallResult with text and metadata, or null si falla
  */
 async function callGroq(
   systemPrompt: string,
   userPrompt: string,
   toolDefinitions?: GroqToolDefinition[],
   _toolRegistry?: ToolRegistry
-): Promise<string | null> {
+): Promise<LLMCallResult | null> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
   if (!apiKey) return null;
+
+  const startTime = Date.now();
 
   try {
     // Build request body: exclude response_format when tools are present
@@ -310,6 +352,15 @@ async function callGroq(
 
     if (!response.ok) throw new Error(`Groq HTTP ${response.status}`);
     const data = await response.json();
+    const latencyMs = Date.now() - startTime;
+
+    // Extract token usage from Groq response metadata (OpenAI-compatible format)
+    const tokensConsumed: number | null =
+      typeof data.usage?.total_tokens === 'number'
+        ? data.usage.total_tokens
+        : null;
+
+    const metadata: LLMCallMetadata = { latencyMs, tokensConsumed };
 
     // Detect tool_calls in response message
     const toolCalls = data.choices?.[0]?.message?.tool_calls;
@@ -319,24 +370,27 @@ async function callGroq(
         const name = firstCall?.function?.name;
         if (!name) throw new Error('Missing function name');
         const args = JSON.parse(firstCall.function.arguments || '{}');
-        return JSON.stringify({
-          __functionCall: true,
-          name,
-          args,
-          callId: firstCall.id,
-        });
+        return {
+          text: JSON.stringify({
+            __functionCall: true,
+            name,
+            args,
+            callId: firstCall.id,
+          }),
+          metadata,
+        };
       } catch {
         console.warn('[AgentService] Malformed function call, treating as text');
         // Try to extract text content from the response
         const text = data.choices?.[0]?.message?.content;
-        if (text) return text;
+        if (text) return { text, metadata };
         return null;
       }
     }
 
     const text = data.choices?.[0]?.message?.content;
     if (!text) throw new Error('Groq: respuesta vacía');
-    return text;
+    return { text, metadata };
   } catch (error) {
     console.warn('[Multi-Agent] Groq falló:', (error as Error).message);
     return null;
@@ -568,23 +622,24 @@ async function handleFunctionCall(
  * Ejecuta una llamada LLM con fallback Gemini → Groq para agentes redactores.
  * Cuando se proporciona toolConfig, implementa un ReAct loop de máximo 2 iteraciones
  * (una llamada inicial + un follow-up después de ejecutar la herramienta).
+ * Propagates telemetry metadata from the underlying API call.
  * @param systemPrompt - Instrucción de sistema
  * @param userPrompt - Mensaje del usuario
  * @param toolConfig - Configuración opcional de herramientas para el ReAct loop
- * @returns Texto de respuesta o null si ambos fallan
+ * @returns Object with text, source, and metadata or null si ambos fallan
  */
 async function callWriterLLM(
   systemPrompt: string,
   userPrompt: string,
   toolConfig?: ToolConfig
-): Promise<{ text: string; source: DriftSource } | null> {
+): Promise<{ text: string; source: DriftSource; metadata: LLMCallMetadata } | null> {
   // Without toolConfig: original behavior (simple fallback, no ReAct)
   if (!toolConfig) {
     const geminiResult = await callGemini(systemPrompt, userPrompt);
-    if (geminiResult) return { text: geminiResult, source: 'gemini' };
+    if (geminiResult) return { text: geminiResult.text, source: 'gemini', metadata: geminiResult.metadata };
 
     const groqResult = await callGroq(systemPrompt, userPrompt);
-    if (groqResult) return { text: groqResult, source: 'groq' };
+    if (groqResult) return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
 
     return null;
   }
@@ -596,7 +651,7 @@ async function callWriterLLM(
   if (geminiResult) {
     // Check if the result is a function call
     try {
-      const parsed = JSON.parse(geminiResult);
+      const parsed = JSON.parse(geminiResult.text);
       if (parsed.__functionCall === true) {
         // Malformed function call: missing name
         if (!parsed.name) {
@@ -604,15 +659,15 @@ async function callWriterLLM(
           return null;
         }
         const followUpText = await handleFunctionCall(parsed, systemPrompt, userPrompt, toolConfig, 'gemini');
-        if (followUpText) return { text: followUpText, source: 'gemini' };
+        if (followUpText) return { text: followUpText, source: 'gemini', metadata: geminiResult.metadata };
         // Follow-up failed or returned another function call — fall through to Groq
       } else {
         // Valid JSON but not a function call — return as text
-        return { text: geminiResult, source: 'gemini' };
+        return { text: geminiResult.text, source: 'gemini', metadata: geminiResult.metadata };
       }
     } catch {
       // Not JSON — it's a plain text response
-      return { text: geminiResult, source: 'gemini' };
+      return { text: geminiResult.text, source: 'gemini', metadata: geminiResult.metadata };
     }
   }
 
@@ -621,7 +676,7 @@ async function callWriterLLM(
   if (groqResult) {
     // Check if the result is a function call
     try {
-      const parsed = JSON.parse(groqResult);
+      const parsed = JSON.parse(groqResult.text);
       if (parsed.__functionCall === true) {
         // Malformed function call: missing name
         if (!parsed.name) {
@@ -629,16 +684,16 @@ async function callWriterLLM(
           return null;
         }
         const followUpText = await handleFunctionCall(parsed, systemPrompt, userPrompt, toolConfig, 'groq');
-        if (followUpText) return { text: followUpText, source: 'groq' };
+        if (followUpText) return { text: followUpText, source: 'groq', metadata: groqResult.metadata };
         // Follow-up failed or returned another function call — return null for deterministic fallback
         return null;
       } else {
         // Valid JSON but not a function call — return as text
-        return { text: groqResult, source: 'groq' };
+        return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
       }
     } catch {
       // Not JSON — it's a plain text response
-      return { text: groqResult, source: 'groq' };
+      return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
     }
   }
 
@@ -842,15 +897,29 @@ function validateWriterResponse(parsed: unknown): WriterResponse | null {
 // ─── Orquestador Principal ────────────────────────────────────────────────────
 
 /**
+ * Computes estimated cost in USD based on token count and provider pricing.
+ * Returns null if token count is unavailable.
+ * @param tokensConsumed - Total tokens used, or null if unavailable
+ * @param source - Provider that served the response ('gemini' | 'groq')
+ * @returns Estimated cost rounded to 4 decimal places, or null
+ */
+function computeEstimatedCost(tokensConsumed: number | null, source: DriftSource): number | null {
+  if (tokensConsumed === null) return null;
+  const costPerToken = source === 'gemini' ? GEMINI_COST_PER_TOKEN : GROQ_COST_PER_TOKEN;
+  return parseFloat((tokensConsumed * costPerToken).toFixed(4));
+}
+
+/**
  * Calcula el drift usando la arquitectura Multi-Agente RAG:
  * 1. Motor determinista local calcula el drift base
  * 2. Agente Enrutador selecciona contexto relevante de la Knowledge Base
  * 3. Agentes Redactores (SOC + CISO) generan briefings en paralelo fundamentados en datos reales
  *
  * Garantiza que SIEMPRE retorna un resultado válido gracias al fallback determinista.
+ * Captures telemetry metadata (latency, tokens, cost) from API calls when available.
  * @param from - Snapshot de origen
  * @param to - Snapshot de destino
- * @returns Resultado del drift con metadatos de fuente
+ * @returns Resultado del drift con metadatos de fuente y telemetría
  */
 export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<AgentDriftResult> {
   // Paso 1: Calcular drift base con motor determinista (siempre funciona)
@@ -887,6 +956,7 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
   let source: DriftSource = 'local';
   let fallbackReason: string | undefined;
+  let telemetry: TelemetryData | undefined;
 
   const socBriefing = extractBriefing(socResult, baseDrift.socBriefing);
   const cisoBriefing = extractBriefing(cisoResult, baseDrift.cisoBriefing);
@@ -899,10 +969,33 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
       fallbackReason = `${failedAgent} agent: Gemini and Groq failed (provider_unavailable). Deterministic fallback used. Active provider for other agent: ${usedProvider}.`;
       console.warn(`[Orchestrator] Graceful degradation: ${failedAgent} agent fell back to deterministic output. Gemini → Groq → Deterministic chain exhausted.`);
     }
+
+    // Aggregate telemetry from successful API calls
+    const allMetadata: LLMCallMetadata[] = [];
+    if (socResult) allMetadata.push(socResult.metadata);
+    if (cisoResult) allMetadata.push(cisoResult.metadata);
+
+    // Compute aggregate latency (max of parallel calls represents wall-clock time)
+    const latencyMs = allMetadata.length > 0
+      ? Math.max(...allMetadata.map(m => m.latencyMs))
+      : null;
+
+    // Compute aggregate tokens (sum of all calls, null if none reported tokens)
+    const tokenValues = allMetadata
+      .map(m => m.tokensConsumed)
+      .filter((t): t is number => t !== null);
+    const tokensConsumed = tokenValues.length > 0 ? tokenValues.reduce((a, b) => a + b, 0) : null;
+
+    // Compute estimated cost from aggregate tokens
+    const estimatedCost = computeEstimatedCost(tokensConsumed, source);
+
+    telemetry = { tokensConsumed, latencyMs, estimatedCost };
   } else {
     source = 'local';
     fallbackReason = 'All providers failed (Gemini → Groq): provider_unavailable. Full deterministic fallback used for SOC and CISO agents.';
     console.warn('[Orchestrator] Graceful degradation: Both SOC and CISO agents fell back to deterministic output. Gemini and Groq unavailable.');
+    // Local deterministic fallback: telemetry is undefined
+    telemetry = undefined;
   }
 
   console.info(`[Orchestrator] ✅ Briefings generados — Fuente: ${source}`);
@@ -915,6 +1008,7 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
     },
     source,
     fallbackReason,
+    telemetry,
   };
 }
 
@@ -924,7 +1018,7 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
  * @param fallback - Briefing generado por el motor determinista
  * @returns Briefing final validado
  */
-function extractBriefing(result: { text: string; source: DriftSource } | null, fallback: string): string {
+function extractBriefing(result: { text: string; source: DriftSource; metadata: LLMCallMetadata } | null, fallback: string): string {
   if (!result) return fallback;
 
   try {

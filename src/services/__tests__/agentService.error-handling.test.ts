@@ -231,7 +231,7 @@ describe('Property 8: Tool error sanitization', () => {
   it('for any error message with Authorization header, strips it', () => {
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !/\s/.test(s) && s.length > 0),
+        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !/\s/.test(s) && s.length > 0 && !'[REDACTED]'.includes(s)),
         (token) => {
           const input = `Error with Authorization: ${token} header`;
           const result = sanitizeErrorMessage(input);

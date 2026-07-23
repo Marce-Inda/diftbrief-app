@@ -213,6 +213,18 @@ export interface SecurityKnowledgeBase {
   playbooks: IncidentPlaybook[];
 }
 
+// ─── Telemetry Types ──────────────────────────────────────────────────────────
+
+/** Datos de telemetría capturados de las llamadas al agente de IA */
+export interface TelemetryData {
+  /** Número de tokens consumidos en la última llamada al agente (prompt + completion). Null cuando se usa fallback local. */
+  tokensConsumed: number | null;
+  /** Latencia de la respuesta de la API en milisegundos. Null cuando se usa fallback local. */
+  latencyMs: number | null;
+  /** Costo estimado en USD (hasta 4 decimales). Null cuando se usa fallback local. */
+  estimatedCost: number | null;
+}
+
 // ─── Drift Types ──────────────────────────────────────────────────────────────
 
 /** Resultado del cálculo de drift entre dos snapshots */
