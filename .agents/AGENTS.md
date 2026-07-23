@@ -101,3 +101,29 @@
 ## 👥 Diferenciación de Roles (Doble Lectura)
 - **Vista SOC:** Orientada a contención técnica, análisis de evidencias/IOCs, preservación forense y acciones operativas inmediatas.
 - **Vista CISO:** Orientada a exposición del negocio, riesgo reputacional y regulatorio, tiempos de comunicación y decisiones ejecutivas clave.
+
+
+---
+
+## 📝 Regla de Mantenimiento de Documentación (Definition of Done)
+
+**INSTRUCCIÓN OBLIGATORIA PARA EL AGENTE:**
+
+Cada vez que termines de implementar una nueva tarea, feature o bugfix, **DEBES revisar obligatoriamente** los archivos en la carpeta `docs/`. Si la tarea reciente impactó alguna de las siguientes áreas, debes modificar, agregar o actualizar el archivo correspondiente en `docs/` **antes de dar la tarea por terminada**:
+
+| Área impactada | Archivo a actualizar |
+|----------------|---------------------|
+| Manejo de secretos, API keys, validación de inputs, hooks de seguridad, mecanismos de ocultamiento | `docs/SECURITY_BY_DESIGN.md` |
+| Flujo de datos, persistencia, comunicación con APIs externas, clasificación de datos, cumplimiento regulatorio | `docs/DATA_GOVERNANCE_AND_COMPLIANCE.md` |
+| Prompts de IA, structured outputs, anti-alucinación, tool calling, enrutamiento, temperatura/topP, observabilidad de IA | `docs/AI_ETHICS_AND_ENGINEERING.md` |
+| Testing (unit, PBT, integration), dependencias, build system, deploy, hooks de automatización, CI/CD | `docs/DEVOPS_AND_INFRASTRUCTURE.md` |
+
+### Criterios de aplicación
+
+1. **Si agregaste o modificaste un hook de Kiro** → Actualiza `SECURITY_BY_DESIGN.md` y `DEVOPS_AND_INFRASTRUCTURE.md`.
+2. **Si modificaste un system prompt o la Knowledge Base** → Actualiza `AI_ETHICS_AND_ENGINEERING.md`.
+3. **Si agregaste una dependencia nueva** → Actualiza `DEVOPS_AND_INFRASTRUCTURE.md`.
+4. **Si cambiaste el flujo de datos o la comunicación con APIs** → Actualiza `DATA_GOVERNANCE_AND_COMPLIANCE.md`.
+5. **Si la tarea no impactó ninguna de estas áreas** → No se requiere actualización, pero verifica que esto sea cierto antes de cerrar.
+
+**Esta regla es parte del Definition of Done del proyecto y su incumplimiento invalida la completitud de la tarea.**
