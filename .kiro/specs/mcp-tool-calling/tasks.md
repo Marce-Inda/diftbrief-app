@@ -78,7 +78,7 @@ Implement a ReAct-pattern agentic loop enabling DriftBrief's SOC and CISO writer
     - For any Drift with `newIOCs.length > 0`, verify SOC prompt contains tool invocation instruction
     - For any Drift with `newIOCs.length === 0`, verify SOC prompt does NOT contain tool invocation instruction
 
-- [-] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 5. Implement ReAct loop in `callWriterLLM` with provider-specific formats
@@ -183,7 +183,7 @@ Implement a ReAct-pattern agentic loop enabling DriftBrief's SOC and CISO writer
     - **Validates: Requirements 9.4**
     - Assert validated briefing text contains no `{`, `}`, `[`, `]` or `"key":` patterns
 
-- [ ] 8. Final checkpoint - Ensure all tests pass and build succeeds
+- [x] 8. Final checkpoint - Ensure all tests pass and build succeeds
   - Run `npm run build` to verify TypeScript compilation with zero errors
   - Run `npx vitest --run` to execute all unit and property tests
   - Ensure all tests pass, ask the user if questions arise.
