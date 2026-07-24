@@ -108,7 +108,7 @@ export function BusinessHeader({
       <div className="business-header__badges">
         {applicable.map((reg) => (
           <span key={reg.id} className="business-header__badge">
-            {reg.name} Alert SLA: {reg.notificationDeadlineHours}h
+            ⚠️ {reg.name} • {reg.notificationDeadlineHours}h SLA
           </span>
         ))}
       </div>
@@ -117,6 +117,10 @@ export function BusinessHeader({
 
   return (
     <section className="business-header" role="banner">
+      <div className="business-header__live-badge">
+        <span className="business-header__live-dot"></span>
+        LIVE DRIFT METRICS
+      </div>
       {triageTimeBadge}
       {/* Financial Risk Indicator */}
       <div
