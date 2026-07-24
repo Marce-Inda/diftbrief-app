@@ -102,7 +102,9 @@ function App() {
           />
         </section>
 
-        <DriftBanner headline={drift.headline} />
+        <div key={activeTransition} className="drift-animate-in">
+          <DriftBanner headline={drift.headline} />
+        </div>
 
         {telemetryEnabled && (
           <div className={sourceClassName}>
@@ -113,7 +115,7 @@ function App() {
           </div>
         )}
 
-        <Suspense fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
+        <Suspense key={`${activeTransition}-${activeRole}`} fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
           <ComparisonPanel
             fromSnapshot={fromSnapshot}
             toSnapshot={toSnapshot}
@@ -121,7 +123,7 @@ function App() {
           />
         </Suspense>
 
-        <section className="app__deltas">
+        <section key={activeTransition} className="app__deltas drift-animate-in">
           <DeltaCard
             title="Nuevos Hechos Confirmados"
             icon="📋"
@@ -144,7 +146,9 @@ function App() {
           )}
         </section>
 
-        <DecisionCard decision={drift.urgentDecision} />
+        <div key={`decision-${activeTransition}`} className="drift-animate-in">
+          <DecisionCard decision={drift.urgentDecision} />
+        </div>
 
         <section className="app__actions">
           <h3 className="app__actions-title">
