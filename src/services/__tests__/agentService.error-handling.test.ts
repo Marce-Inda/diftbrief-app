@@ -173,7 +173,7 @@ describe('Property 8: Tool error sanitization', () => {
   it('for any error message containing Bearer tokens, strips them', () => {
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !/\s/.test(s) && s.length > 0 && !s.startsWith('[REDACTED')),
+        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !/\s/.test(s) && s.length > 0 && !s.startsWith('[REDACTED') && !'[REDACTED]'.startsWith(s)),
         (token) => {
           const input = `Error with Bearer ${token} in request`;
           const result = sanitizeErrorMessage(input);

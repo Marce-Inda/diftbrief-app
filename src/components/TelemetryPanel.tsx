@@ -4,11 +4,14 @@
  */
 
 import type { TelemetryData } from '../types';
+import type { DriftSource } from '../services/agentService';
 
 /** Props para el componente TelemetryPanel */
 export interface TelemetryPanelProps {
   /** Datos de telemetría a mostrar */
   data: TelemetryData;
+  /** Fuente que generó la respuesta del agente */
+  source?: DriftSource;
 }
 
 /**
@@ -48,7 +51,7 @@ function formatCost(value: number | null): string {
  * @param props - Props del componente con datos de telemetría
  * @returns Elemento JSX del panel de telemetría
  */
-export function TelemetryPanel({ data }: TelemetryPanelProps) {
+export function TelemetryPanel({ data, source }: TelemetryPanelProps) {
   return (
     <div
       className="telemetry-panel"
@@ -91,6 +94,15 @@ export function TelemetryPanel({ data }: TelemetryPanelProps) {
           alignItems: 'baseline',
         }}
       >
+        {source && (
+          <>
+            <dt style={{ color: 'var(--color-text-secondary)' }}>Source</dt>
+            <dd style={{ margin: 0, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {source}
+            </dd>
+          </>
+        )}
+
         <dt style={{ color: 'var(--color-text-secondary)' }}>Tokens</dt>
         <dd style={{ margin: 0, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {formatTokens(data.tokensConsumed)}

@@ -12,7 +12,7 @@ import { routeContextLocally } from './localRouter';
 import { queryThreatIntelligence, queryRegulatoryPrecedents } from './tools';
 
 /** Fuente que generó el drift */
-export type DriftSource = 'gemini' | 'groq' | 'local';
+export type DriftSource = 'gemini' | 'groq' | 'openrouter' | 'local';
 
 /** Resultado del agente con metadatos de fuente */
 export interface AgentDriftResult {
@@ -179,6 +179,7 @@ const GROQ_WRITER_SCHEMA = {
 /** Approximate token pricing per token (USD) for cost estimation */
 const GEMINI_COST_PER_TOKEN = 0.00001;
 const GROQ_COST_PER_TOKEN = 0.000001;
+const OPENROUTER_COST_PER_TOKEN = 0;
 
 /** Internal metadata captured from a single LLM API call */
 interface LLMCallMetadata {
@@ -397,10 +398,129 @@ async function callGroq(
   }
 }
 
+/**
+ * Executes a call to OpenRouter with OpenAI-compatible format.
+ * Supports both plain text responses and tool-calling mode.
+ * Uses the free-tier model `meta-llama/llama-3.1-8b-instruct:free`.
+ * @param systemPrompt - System instruction
+ * @param userPrompt - User message
+ * @param toolDefinitions - Optional tool definitions (same format as Groq)
+ * @param _toolRegistry - Tool registry (reserved for ReAct loop)
+ * @returns LLMCallResult with text and metadata, or null on failure
+ */
+export async function callOpenRouter(
+  systemPrompt: string,
+  userPrompt: string,
+  toolDefinitions?: GroqToolDefinition[],
+  _toolRegistry?: ToolRegistry
+): Promise<LLMCallResult | null> {
+  const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') return null;
+
+  const startTime = Date.now();
+
+  try {
+    const requestBody: Record<string, unknown> = {
+      model: 'meta-llama/llama-3.1-8b-instruct:free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.0,
+    };
+
+    if (toolDefinitions && toolDefinitions.length > 0) {
+      requestBody.tools = toolDefinitions;
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://driftbrief-app.vercel.app',
+        'X-Title': 'DriftBrief',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      const msg = sanitizeErrorMessage(`OpenRouter HTTP ${response.status}`);
+      console.warn(`[Multi-Agent] OpenRouter falló: ${msg}`);
+      return null;
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = await response.json();
+    } catch {
+      const msg = sanitizeErrorMessage('OpenRouter: response body is not valid JSON');
+      console.warn(`[Multi-Agent] ${msg}`);
+      return null;
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    // Extract token usage from OpenRouter response metadata (OpenAI-compatible format)
+    const usage = data.usage as Record<string, unknown> | undefined;
+    const tokensConsumed: number | null =
+      typeof usage?.total_tokens === 'number'
+        ? usage.total_tokens
+        : null;
+
+    const metadata: LLMCallMetadata = { latencyMs, tokensConsumed };
+
+    // Detect tool_calls in response message
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+    const toolCalls = message?.tool_calls as Array<Record<string, unknown>> | undefined;
+
+    if (toolCalls && toolCalls.length > 0) {
+      try {
+        const firstCall = toolCalls[0];
+        const fn = firstCall?.function as Record<string, unknown> | undefined;
+        const name = fn?.name as string | undefined;
+        if (!name) throw new Error('Missing function name');
+        const args = JSON.parse((fn?.arguments as string) || '{}');
+        return {
+          text: JSON.stringify({
+            __functionCall: true,
+            name,
+            args,
+            callId: firstCall.id,
+          }),
+          metadata,
+        };
+      } catch {
+        const msg = sanitizeErrorMessage('OpenRouter: malformed tool_call in response');
+        console.warn(`[AgentService] ${msg}`);
+        const text = message?.content as string | undefined;
+        if (text) return { text, metadata };
+        return null;
+      }
+    }
+
+    const text = message?.content as string | undefined;
+    if (!text) {
+      const msg = sanitizeErrorMessage('OpenRouter: empty or missing content in response');
+      console.warn(`[Multi-Agent] ${msg}`);
+      return null;
+    }
+    return { text, metadata };
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const msg = sanitizeErrorMessage(`OpenRouter falló: ${rawMessage}`);
+    console.warn(`[Multi-Agent] ${msg}`);
+    return null;
+  }
+}
+
 /** Configuration for tool calling in the ReAct loop */
 interface ToolConfig {
   geminiDeclarations: GeminiFunctionDeclaration[];
   groqDefinitions: GroqToolDefinition[];
+  openrouterDefinitions: GroqToolDefinition[];
   registry: ToolRegistry;
 }
 
@@ -531,6 +651,103 @@ async function sendGroqFollowUp(
 }
 
 /**
+ * Sends an OpenRouter follow-up request containing the tool response after execution.
+ * Mirrors sendGroqFollowUp but targets the OpenRouter endpoint with appropriate headers.
+ * @param systemPrompt - Original system instruction
+ * @param userPrompt - Original user message
+ * @param functionName - Name of the function that was called
+ * @param functionArgs - Arguments the LLM passed to the function
+ * @param toolResult - Result from executing the tool (or error object)
+ * @param callId - The tool_call_id from the original OpenRouter response
+ * @param toolDefinitions - Tool definitions to include in follow-up
+ * @returns Text response from the follow-up or null on failure
+ */
+export async function sendOpenRouterFollowUp(
+  systemPrompt: string,
+  userPrompt: string,
+  functionName: string,
+  functionArgs: Record<string, string>,
+  toolResult: unknown,
+  callId: string,
+  toolDefinitions: GroqToolDefinition[]
+): Promise<string | null> {
+  const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') return null;
+
+  try {
+    const requestBody = {
+      model: 'meta-llama/llama-3.1-8b-instruct:free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: null, tool_calls: [{ id: callId, type: 'function', function: { name: functionName, arguments: JSON.stringify(functionArgs) } }] },
+        { role: 'tool', tool_call_id: callId, content: JSON.stringify(toolResult) },
+      ],
+      temperature: 0.0,
+      tools: toolDefinitions,
+    };
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://driftbrief-app.vercel.app',
+        'X-Title': 'DriftBrief',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      const msg = sanitizeErrorMessage(`OpenRouter follow-up HTTP ${response.status}`);
+      console.warn(`[Multi-Agent] ${msg}`);
+      return null;
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = await response.json();
+    } catch {
+      const msg = sanitizeErrorMessage('OpenRouter follow-up: response body is not valid JSON');
+      console.warn(`[Multi-Agent] ${msg}`);
+      return null;
+    }
+
+    // Check if follow-up also returns a function call
+    const choices = data.choices as Array<Record<string, unknown>> | undefined;
+    const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+    const toolCalls = message?.tool_calls as Array<Record<string, unknown>> | undefined;
+
+    if (toolCalls && toolCalls.length > 0) {
+      const firstCall = toolCalls[0];
+      const fn = firstCall?.function as Record<string, unknown> | undefined;
+      const name = fn?.name as string | undefined;
+      const args = fn?.arguments as string | undefined;
+      return JSON.stringify({
+        __functionCall: true,
+        name: name || 'unknown',
+        args: args ? JSON.parse(args) : {},
+        callId: firstCall.id,
+      });
+    }
+
+    const text = message?.content as string | undefined;
+    if (!text) {
+      const msg = sanitizeErrorMessage('OpenRouter follow-up: empty or missing content');
+      console.warn(`[Multi-Agent] ${msg}`);
+      return null;
+    }
+    return text;
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const msg = sanitizeErrorMessage(`OpenRouter follow-up falló: ${rawMessage}`);
+    console.warn(`[Multi-Agent] ${msg}`);
+    return null;
+  }
+}
+
+/**
  * Sanitizes an error message by removing sensitive information.
  * Strips VITE_* environment variable values, Bearer tokens, Authorization headers,
  * and absolute file paths. Truncates result to 200 characters.
@@ -570,7 +787,7 @@ async function handleFunctionCall(
   systemPrompt: string,
   userPrompt: string,
   toolConfig: ToolConfig,
-  provider: 'gemini' | 'groq'
+  provider: 'gemini' | 'groq' | 'openrouter'
 ): Promise<string | null> {
   const { name: functionName, args: functionArgs, callId } = parsedCall;
 
@@ -595,6 +812,10 @@ async function handleFunctionCall(
   if (provider === 'gemini') {
     followUpResult = await sendGeminiFollowUp(
       systemPrompt, userPrompt, functionName, functionArgs, toolResult, toolConfig.geminiDeclarations
+    );
+  } else if (provider === 'openrouter') {
+    followUpResult = await sendOpenRouterFollowUp(
+      systemPrompt, userPrompt, functionName, functionArgs, toolResult, callId || 'call_unknown', toolConfig.openrouterDefinitions
     );
   } else {
     followUpResult = await sendGroqFollowUp(
@@ -641,6 +862,9 @@ async function callWriterLLM(
     const groqResult = await callGroq(systemPrompt, userPrompt);
     if (groqResult) return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
 
+    const openRouterResult = await callOpenRouter(systemPrompt, userPrompt);
+    if (openRouterResult) return { text: openRouterResult.text, source: 'openrouter', metadata: openRouterResult.metadata };
+
     return null;
   }
 
@@ -681,12 +905,12 @@ async function callWriterLLM(
         // Malformed function call: missing name
         if (!parsed.name) {
           console.warn('[AgentService] Malformed function call, treating as text');
-          return null;
+          // Fall through to OpenRouter
+        } else {
+          const followUpText = await handleFunctionCall(parsed, systemPrompt, userPrompt, toolConfig, 'groq');
+          if (followUpText) return { text: followUpText, source: 'groq', metadata: groqResult.metadata };
+          // Follow-up failed or returned another function call — fall through to OpenRouter
         }
-        const followUpText = await handleFunctionCall(parsed, systemPrompt, userPrompt, toolConfig, 'groq');
-        if (followUpText) return { text: followUpText, source: 'groq', metadata: groqResult.metadata };
-        // Follow-up failed or returned another function call — return null for deterministic fallback
-        return null;
       } else {
         // Valid JSON but not a function call — return as text
         return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
@@ -694,6 +918,32 @@ async function callWriterLLM(
     } catch {
       // Not JSON — it's a plain text response
       return { text: groqResult.text, source: 'groq', metadata: groqResult.metadata };
+    }
+  }
+
+  // Try OpenRouter as third fallback
+  const openRouterResult = await callOpenRouter(systemPrompt, userPrompt, toolConfig.openrouterDefinitions, toolConfig.registry);
+  if (openRouterResult) {
+    // Check if the result is a function call
+    try {
+      const parsed = JSON.parse(openRouterResult.text);
+      if (parsed.__functionCall === true) {
+        // Malformed function call: missing name
+        if (!parsed.name) {
+          console.warn('[AgentService] Malformed function call, treating as text');
+          return null;
+        }
+        const followUpText = await handleFunctionCall(parsed, systemPrompt, userPrompt, toolConfig, 'openrouter');
+        if (followUpText) return { text: followUpText, source: 'openrouter', metadata: openRouterResult.metadata };
+        // Follow-up failed or returned another function call — return null for deterministic fallback
+        return null;
+      } else {
+        // Valid JSON but not a function call — return as text
+        return { text: openRouterResult.text, source: 'openrouter', metadata: openRouterResult.metadata };
+      }
+    } catch {
+      // Not JSON — it's a plain text response
+      return { text: openRouterResult.text, source: 'openrouter', metadata: openRouterResult.metadata };
     }
   }
 
@@ -905,7 +1155,13 @@ function validateWriterResponse(parsed: unknown): WriterResponse | null {
  */
 function computeEstimatedCost(tokensConsumed: number | null, source: DriftSource): number | null {
   if (tokensConsumed === null) return null;
-  const costPerToken = source === 'gemini' ? GEMINI_COST_PER_TOKEN : GROQ_COST_PER_TOKEN;
+  const costMap: Record<DriftSource, number> = {
+    gemini: GEMINI_COST_PER_TOKEN,
+    groq: GROQ_COST_PER_TOKEN,
+    openrouter: OPENROUTER_COST_PER_TOKEN,
+    local: 0,
+  };
+  const costPerToken = costMap[source] ?? 0;
   return parseFloat((tokensConsumed * costPerToken).toFixed(4));
 }
 
@@ -939,12 +1195,14 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   const socToolConfig: ToolConfig = {
     geminiDeclarations: [THREAT_INTEL_GEMINI_DECLARATION],
     groqDefinitions: [THREAT_INTEL_GROQ_DEFINITION],
+    openrouterDefinitions: [THREAT_INTEL_GROQ_DEFINITION],
     registry: { queryThreatIntelligence: (args) => queryThreatIntelligence(args.ioc) },
   };
 
   const cisoToolConfig: ToolConfig = {
     geminiDeclarations: [REGULATORY_GEMINI_DECLARATION],
     groqDefinitions: [REGULATORY_GROQ_DEFINITION],
+    openrouterDefinitions: [REGULATORY_GROQ_DEFINITION],
     registry: { queryRegulatoryPrecedents: (args) => queryRegulatoryPrecedents(args.regulation) },
   };
 
@@ -962,12 +1220,26 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
   const cisoBriefing = extractBriefing(cisoResult, baseDrift.cisoBriefing);
 
   if (socResult || cisoResult) {
-    source = socResult?.source === 'gemini' || cisoResult?.source === 'gemini' ? 'gemini' : 'groq';
+    // Priority: gemini > groq > openrouter > local
+    if (socResult?.source === 'gemini' || cisoResult?.source === 'gemini') {
+      source = 'gemini';
+    } else if (socResult?.source === 'groq' || cisoResult?.source === 'groq') {
+      source = 'groq';
+    } else if (socResult?.source === 'openrouter' || cisoResult?.source === 'openrouter') {
+      source = 'openrouter';
+    } else {
+      source = 'local';
+    }
+
+    if (source === 'openrouter') {
+      fallbackReason = 'Gemini and Groq failed; OpenRouter served the response.';
+    }
+
     if (!socResult || !cisoResult) {
       const failedAgent = !socResult ? 'SOC' : 'CISO';
       const usedProvider = socResult?.source || cisoResult?.source || 'unknown';
-      fallbackReason = `${failedAgent} agent: Gemini and Groq failed (provider_unavailable). Deterministic fallback used. Active provider for other agent: ${usedProvider}.`;
-      console.warn(`[Orchestrator] Graceful degradation: ${failedAgent} agent fell back to deterministic output. Gemini → Groq → Deterministic chain exhausted.`);
+      fallbackReason = `${failedAgent} agent: Gemini, Groq, and OpenRouter failed (provider_unavailable). Deterministic fallback used. Active provider for other agent: ${usedProvider}.`;
+      console.warn(`[Orchestrator] Graceful degradation: ${failedAgent} agent fell back to deterministic output. Gemini → Groq → OpenRouter → Deterministic chain exhausted.`);
     }
 
     // Aggregate telemetry from successful API calls
@@ -992,8 +1264,8 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
     telemetry = { tokensConsumed, latencyMs, estimatedCost };
   } else {
     source = 'local';
-    fallbackReason = 'All providers failed (Gemini → Groq): provider_unavailable. Full deterministic fallback used for SOC and CISO agents.';
-    console.warn('[Orchestrator] Graceful degradation: Both SOC and CISO agents fell back to deterministic output. Gemini and Groq unavailable.');
+    fallbackReason = 'All providers failed (Gemini → Groq → OpenRouter): provider_unavailable. Full deterministic fallback used for SOC and CISO agents.';
+    console.warn('[Orchestrator] Graceful degradation: Both SOC and CISO agents fell back to deterministic output. Gemini, Groq, and OpenRouter unavailable.');
     // Local deterministic fallback: telemetry is undefined
     telemetry = undefined;
   }

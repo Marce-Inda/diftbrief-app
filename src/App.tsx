@@ -146,7 +146,7 @@ function App() {
 
       {telemetryEnabled && isVisible && (
         <Suspense fallback={null}>
-          <TelemetryPanel data={telemetryData} />
+          <TelemetryPanel data={telemetryData} source={source} />
         </Suspense>
       )}
     </div>
