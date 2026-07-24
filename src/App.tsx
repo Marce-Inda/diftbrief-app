@@ -4,10 +4,12 @@
  */
 
 import { useState, useMemo, lazy, Suspense } from 'react';
-import type { TransitionId, UserRole, Snapshot, TelemetryData } from './types';
+import type { TransitionId, UserRole, Snapshot, TelemetryData, SeverityLevel } from './types';
 import { useAgentDrift } from './hooks/useAgentDrift';
 import { useTelemetryToggle } from './hooks/useTelemetryToggle';
 import { Header } from './components/Header';
+import { BusinessHeader } from './components/BusinessHeader';
+import { SECURITY_KNOWLEDGE_BASE } from './services/knowledgeBase';
 import { IncidentCard } from './components/IncidentCard';
 import { SnapshotSelector } from './components/SnapshotSelector';
 import { DriftBanner } from './components/DriftBanner';
@@ -24,6 +26,20 @@ const BriefExportPanel = lazy(() => import('./components/BriefExportPanel').then
 const TelemetryPanel = lazy(() => import('./components/TelemetryPanel').then(m => ({ default: m.TelemetryPanel })));
 
 const snapshots: Snapshot[] = snapshotsData as Snapshot[];
+
+/**
+ * Mapea un nivel de severidad a su riesgo financiero estimado en USD por hora.
+ * @param severity - Nivel de severidad del incidente
+ * @returns Exposición financiera estimada en USD
+ */
+function severityToFinancialRisk(severity: SeverityLevel): number {
+  switch (severity) {
+    case 'critical': return 150000;
+    case 'high': return 50000;
+    case 'medium': return 10000;
+    case 'low': return 0;
+  }
+}
 
 /**
  * Componente raíz de la aplicación DriftBrief.
@@ -63,6 +79,14 @@ function App() {
   return (
     <div className="app">
       <Header />
+
+      <BusinessHeader
+        automatedTimeSeconds={12}
+        manualTimeSeconds={2700}
+        severity={toSnapshot.severity}
+        financialExposureUsd={severityToFinancialRisk(toSnapshot.severity)}
+        regulations={SECURITY_KNOWLEDGE_BASE.regulations}
+      />
 
       <main className="app__main">
         <IncidentCard />
