@@ -80,12 +80,14 @@ function App() {
 
         <DriftBanner headline={drift.headline} />
 
-        <div className={sourceClassName}>
-          {isEnriching
-            ? '⏳ Consultando agente IA...'
-            : `🔌 Fuente: ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
-          }
-        </div>
+        {telemetryEnabled && (
+          <div className={sourceClassName}>
+            {isEnriching
+              ? '⏳ Consultando agente IA...'
+              : `🔌 Fuente: ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
+            }
+          </div>
+        )}
 
         <Suspense fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
           <ComparisonPanel
