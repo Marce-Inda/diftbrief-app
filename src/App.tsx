@@ -56,7 +56,12 @@ function App() {
     return { fromSnapshot: from!, toSnapshot: to! };
   }, [activeTransition]);
 
-  const { drift, source, fallbackReason, isEnriching, telemetry } = useAgentDrift(fromSnapshot, toSnapshot);
+  const { drift, source, fallbackReason, telemetry } = useAgentDrift(fromSnapshot, toSnapshot);
+
+  // Log provider status to console only (never show in UI)
+  if (import.meta.env.DEV && fallbackReason) {
+    console.warn(`[DriftBrief] Provider fallback: ${source.toUpperCase()} — ${fallbackReason}`);
+  }
   const { isVisible } = useTelemetryToggle();
   const telemetryEnabled = import.meta.env.VITE_SHOW_TELEMETRY === 'true';
 
@@ -102,14 +107,7 @@ function App() {
           <DriftBanner headline={drift.headline} />
         </div>
 
-        {import.meta.env.DEV && telemetryEnabled && (
-          <div className="app__drift-source-compact">
-            {isEnriching
-              ? '⏳ IA...'
-              : `🔌 ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
-            }
-          </div>
-        )}
+
 
         <Suspense key={`panel-${activeTransition}-${activeRole}`} fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
           <ComparisonPanel
