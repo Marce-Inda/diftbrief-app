@@ -94,9 +94,9 @@ export function BusinessHeader({
       ? null
       : (
           <div className="business-header__metric business-header__triage">
-            <span className="business-header__label">Triage Time</span>
+            <span className="business-header__label">TIEMPO DE TRIAGE</span>
             <span className="business-header__value">
-              ⏱️ <span className="business-header__automated">{formatTime(automatedTimeSeconds)}</span> vs {formatTime(manualTimeSeconds)} manual
+              ⏱️ <span className="business-header__automated">{formatTime(automatedTimeSeconds)}</span> vs {formatTime(manualTimeSeconds)} triage manual
             </span>
           </div>
         );
@@ -104,11 +104,11 @@ export function BusinessHeader({
   const applicable = getApplicableRegulations(regulations);
   const regulatorySLABadge = applicable.length > 0 ? (
     <div className="business-header__metric business-header__regulatory">
-      <span className="business-header__label">Regulatory SLA</span>
+      <span className="business-header__label">SLA REGULATORIO</span>
       <div className="business-header__badges">
         {applicable.map((reg) => (
           <span key={reg.id} className="business-header__badge">
-            ⚠️ {reg.name} • {reg.notificationDeadlineHours}h SLA
+            ⚠️ {reg.name} • SLA de {reg.notificationDeadlineHours}h
           </span>
         ))}
       </div>
@@ -119,7 +119,7 @@ export function BusinessHeader({
     <section className="business-header" role="banner">
       <div className="business-header__live-badge">
         <span className="business-header__live-dot"></span>
-        LIVE DRIFT METRICS
+        MÉTRICAS DE DRIFT EN VIVO
       </div>
       {triageTimeBadge}
       {/* Financial Risk Indicator */}
@@ -127,7 +127,7 @@ export function BusinessHeader({
         className={`business-header__metric business-header__financial${severityToClassName(severity) ? ` ${severityToClassName(severity)}` : ''}`}
         {...((severity === 'critical' || severity === 'high') ? { 'aria-label': `Riesgo financiero: severidad ${severity}` } : {})}
       >
-        <span className="business-header__label">Financial Risk</span>
+        <span className="business-header__label">RIESGO FINANCIERO</span>
         <span className="business-header__value">
           {financialExposureUsd == null ? '—' : formatFinancialValue(financialExposureUsd)}
         </span>

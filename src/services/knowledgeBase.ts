@@ -15,7 +15,7 @@ export const SECURITY_KNOWLEDGE_BASE: SecurityKnowledgeBase = {
   regulations: [
     {
       id: 'gdpr',
-      name: 'General Data Protection Regulation (GDPR)',
+      name: 'Reglamento General de Protección de Datos (GDPR)',
       jurisdiction: 'Unión Europea / EEA',
       scope: 'Protección de datos personales de individuos en la UE',
       notificationDeadlineHours: 72,
@@ -40,7 +40,7 @@ export const SECURITY_KNOWLEDGE_BASE: SecurityKnowledgeBase = {
     },
     {
       id: 'hipaa',
-      name: 'Health Insurance Portability and Accountability Act (HIPAA)',
+      name: 'Ley de Portabilidad y Responsabilidad (HIPAA)',
       jurisdiction: 'Estados Unidos',
       scope: 'Protección de información de salud protegida (PHI)',
       notificationDeadlineHours: 1440, // 60 días
@@ -65,7 +65,7 @@ export const SECURITY_KNOWLEDGE_BASE: SecurityKnowledgeBase = {
     },
     {
       id: 'nis2',
-      name: 'Network and Information Security Directive 2 (NIS2)',
+      name: 'Directiva de Seguridad NIS2',
       jurisdiction: 'Unión Europea',
       scope: 'Infraestructura crítica y entidades esenciales/importantes',
       notificationDeadlineHours: 24, // Alerta temprana en 24h, notificación completa en 72h

@@ -11,10 +11,10 @@ export function Header() {
     <header className="header">
       <div className="header__brand">
         <h1 className="header__title">DriftBrief</h1>
-        <span className="header__badge">Incident Response</span>
+        <span className="header__badge">Respuesta a Incidentes</span>
       </div>
       <p className="header__tagline">
-        Understand what changed before deciding what to do next.
+        Comprende qué cambió antes de decidir qué hacer.
       </p>
     </header>
   );
