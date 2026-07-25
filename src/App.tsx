@@ -13,6 +13,7 @@ import { SECURITY_KNOWLEDGE_BASE } from './services/knowledgeBase';
 import { IncidentCard } from './components/IncidentCard';
 import { IncidentTimeline } from './components/IncidentTimeline';
 import { SnapshotSelector } from './components/SnapshotSelector';
+import { SnapshotDetailModal } from './components/SnapshotDetailModal';
 import { DriftBanner } from './components/DriftBanner';
 import { DeltaCard } from './components/DeltaCard';
 import { DecisionCard } from './components/DecisionCard';
@@ -49,6 +50,7 @@ function severityToFinancialRisk(severity: SeverityLevel): number {
 function App() {
   const [activeTransition, setActiveTransition] = useState<TransitionId>('A-B');
   const [activeRole, setActiveRole] = useState<UserRole>('soc');
+  const [selectedSnapshotForModal, setSelectedSnapshotForModal] = useState<Snapshot | null>(null);
 
   const { fromSnapshot, toSnapshot } = useMemo(() => {
     const [fromId, toId] = activeTransition.split('-');
@@ -81,7 +83,7 @@ function App() {
   }, [activeTransition]);
 
   /**
-   * Handles timeline node clicks by updating the active transition.
+   * Handles timeline node clicks by updating the active transition and opening the detail modal.
    * Clicking node B sets transition "A-B", clicking node C sets "B-C".
    * Clicking node A (always origin) keeps transition at "A-B".
    */
@@ -91,7 +93,11 @@ function App() {
     } else if (nodeId === 'C') {
       setActiveTransition('B-C');
     }
-    // Clicking "A" doesn't change transition — it's always the origin
+    // Open modal with the clicked snapshot
+    const clickedSnapshot = snapshots.find(s => s.id === nodeId);
+    if (clickedSnapshot) {
+      setSelectedSnapshotForModal(clickedSnapshot);
+    }
   };
 
   const { drift, source, fallbackReason, telemetry } = useAgentDrift(fromSnapshot, toSnapshot);
@@ -217,6 +223,12 @@ function App() {
           <TelemetryPanel data={telemetryData} source={source} />
         </Suspense>
       )}
+
+      <SnapshotDetailModal
+        snapshot={selectedSnapshotForModal}
+        isOpen={selectedSnapshotForModal !== null}
+        onClose={() => setSelectedSnapshotForModal(null)}
+      />
     </div>
   );
 }
