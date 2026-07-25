@@ -186,7 +186,7 @@ function App() {
         </section>
 
         <div key={`decision-${activeTransition}`} className="drift-animate-in">
-          <DecisionCard decision={drift.urgentDecision} />
+          <DecisionCard decision={drift.urgentDecision} activeRole={activeRole} />
         </div>
 
         <section className="app__actions">
