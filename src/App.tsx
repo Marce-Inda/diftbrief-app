@@ -4,13 +4,14 @@
  */
 
 import { useState, useMemo, lazy, Suspense } from 'react';
-import type { TransitionId, UserRole, Snapshot, TelemetryData, SeverityLevel } from './types';
+import type { TransitionId, UserRole, Snapshot, TelemetryData, SeverityLevel, TimelineNode } from './types';
 import { useAgentDrift } from './hooks/useAgentDrift';
 import { useTelemetryToggle } from './hooks/useTelemetryToggle';
 import { Header } from './components/Header';
 import { BusinessHeader } from './components/BusinessHeader';
 import { SECURITY_KNOWLEDGE_BASE } from './services/knowledgeBase';
 import { IncidentCard } from './components/IncidentCard';
+import { IncidentTimeline } from './components/IncidentTimeline';
 import { SnapshotSelector } from './components/SnapshotSelector';
 import { DriftBanner } from './components/DriftBanner';
 import { DeltaCard } from './components/DeltaCard';
@@ -56,6 +57,43 @@ function App() {
     return { fromSnapshot: from!, toSnapshot: to! };
   }, [activeTransition]);
 
+  /**
+   * Maps snapshot data to TimelineNode[] for the IncidentTimeline component.
+   * Formats ISO timestamps to localized time strings (e.g., "02:30 AM").
+   */
+  const timelineNodes: TimelineNode[] = useMemo(() => {
+    return snapshots.map((snapshot, index) => ({
+      id: snapshot.id,
+      label: `Snapshot ${index + 1}: ${snapshot.title}`,
+      time: new Date(snapshot.timestamp).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      }),
+      severity: snapshot.severity,
+    }));
+  }, []);
+
+  /** Derives the active node ID from the current transition (the "to" endpoint). */
+  const activeNodeId = useMemo(() => {
+    const [, toId] = activeTransition.split('-');
+    return toId;
+  }, [activeTransition]);
+
+  /**
+   * Handles timeline node clicks by updating the active transition.
+   * Clicking node B sets transition "A-B", clicking node C sets "B-C".
+   * Clicking node A (always origin) keeps transition at "A-B".
+   */
+  const handleTimelineNodeClick = (nodeId: string): void => {
+    if (nodeId === 'B') {
+      setActiveTransition('A-B');
+    } else if (nodeId === 'C') {
+      setActiveTransition('B-C');
+    }
+    // Clicking "A" doesn't change transition — it's always the origin
+  };
+
   const { drift, source, fallbackReason, telemetry } = useAgentDrift(fromSnapshot, toSnapshot);
 
   // Log provider status to console only (never show in UI)
@@ -91,6 +129,13 @@ function App() {
 
       <main className="app__main">
         <IncidentCard />
+
+        <IncidentTimeline
+          nodes={timelineNodes}
+          activeNodeId={activeNodeId}
+          activeTransition={{ from: activeTransition.split('-')[0], to: activeTransition.split('-')[1] }}
+          onNodeClick={handleTimelineNodeClick}
+        />
 
         <section className="app__controls">
           <SnapshotSelector

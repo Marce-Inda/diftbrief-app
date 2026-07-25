@@ -213,6 +213,32 @@ export interface SecurityKnowledgeBase {
   playbooks: IncidentPlaybook[];
 }
 
+// ─── Timeline Types ───────────────────────────────────────────────────────────
+
+/** Nodo individual de la línea de tiempo del incidente */
+export interface TimelineNode {
+  /** Unique identifier for the node */
+  id: string;
+  /** Display label, e.g., "Snapshot 1: Anomalía" */
+  label: string;
+  /** Formatted time string, e.g., "08:00 AM" */
+  time: string;
+  /** Severity level determining visual treatment */
+  severity: SeverityLevel;
+}
+
+/** Props del componente IncidentTimeline */
+export interface IncidentTimelineProps {
+  /** Ordered array of timeline nodes to render */
+  nodes: TimelineNode[];
+  /** ID of the currently active/selected node */
+  activeNodeId?: string;
+  /** Currently active transition between two nodes */
+  activeTransition?: { from: string; to: string };
+  /** Callback when user clicks a timeline node */
+  onNodeClick?: (nodeId: string) => void;
+}
+
 // ─── Telemetry Types ──────────────────────────────────────────────────────────
 
 /** Datos de telemetría capturados de las llamadas al agente de IA */
