@@ -72,10 +72,6 @@ function App() {
       .sort((a, b) => a.priority - b.priority);
   }, [drift.recommendedActions, activeRole]);
 
-  const sourceClassName = isEnriching
-    ? 'app__drift-source app__drift-source--loading'
-    : `app__drift-source app__drift-source--${source}`;
-
   return (
     <div className="app">
       <Header />
@@ -102,20 +98,20 @@ function App() {
           />
         </section>
 
-        <div key={activeTransition} className="drift-animate-in">
+        <div key={`banner-${activeTransition}`} className="drift-animate-in">
           <DriftBanner headline={drift.headline} />
         </div>
 
-        {telemetryEnabled && (
-          <div className={sourceClassName}>
+        {import.meta.env.DEV && telemetryEnabled && (
+          <div className="app__drift-source-compact">
             {isEnriching
-              ? '⏳ Consultando agente IA...'
-              : `🔌 Fuente: ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
+              ? '⏳ IA...'
+              : `🔌 ${source.toUpperCase()}${fallbackReason ? ` — ${fallbackReason}` : ''}`
             }
           </div>
         )}
 
-        <Suspense key={`${activeTransition}-${activeRole}`} fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
+        <Suspense key={`panel-${activeTransition}-${activeRole}`} fallback={<div className="app__lazy-fallback">Cargando panel...</div>}>
           <ComparisonPanel
             fromSnapshot={fromSnapshot}
             toSnapshot={toSnapshot}
@@ -123,7 +119,7 @@ function App() {
           />
         </Suspense>
 
-        <section key={activeTransition} className="app__deltas drift-animate-in">
+        <section key={`deltas-${activeTransition}`} className="app__deltas drift-animate-in">
           <DeltaCard
             title="Nuevos Hechos Confirmados"
             icon="📋"

@@ -716,6 +716,24 @@ body {
   color: var(--color-bg-base);
 }
 
+/* Compact debug-only source badge */
+.app__drift-source-compact {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--color-text-muted);
+  background: rgba(91, 192, 235, 0.08);
+  border: 1px solid rgba(91, 192, 235, 0.15);
+  margin-bottom: var(--spacing-sm);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app__lazy-fallback {
   padding: var(--spacing-md);
   color: var(--color-text-muted);
