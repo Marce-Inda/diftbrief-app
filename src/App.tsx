@@ -141,6 +141,7 @@ function App() {
           <SnapshotSelector
             activeTransition={activeTransition}
             onTransitionChange={setActiveTransition}
+            onRoleChange={setActiveRole}
           />
           <RoleSwitcher
             activeRole={activeRole}
