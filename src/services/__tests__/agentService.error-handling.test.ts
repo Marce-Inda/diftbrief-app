@@ -11,7 +11,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fc from 'fast-check';
-import { sanitizeErrorMessage, getAgentDrift } from '../agentService';
+import {
+  sanitizeErrorMessage,
+  getAgentDrift,
+  callWriterLLM,
+  THREAT_INTEL_GEMINI_DECLARATION,
+  REGULATORY_GEMINI_DECLARATION,
+  THREAT_INTEL_GROQ_DEFINITION,
+  REGULATORY_GROQ_DEFINITION,
+} from '../agentService';
+import type { ToolRegistry } from '../agentService';
 import type { Snapshot } from '../../types';
 import snapshots from '../../data/snapshots.json';
 
@@ -66,6 +75,14 @@ describe('Property 7: Unregistered function produces error Function_Response', (
   });
 
   it('logs warning for unregistered function names', async () => {
+    // Build a toolConfig with a registry that does NOT contain the unregistered name
+    const toolConfig = {
+      geminiDeclarations: [THREAT_INTEL_GEMINI_DECLARATION, REGULATORY_GEMINI_DECLARATION],
+      groqDefinitions: [THREAT_INTEL_GROQ_DEFINITION, REGULATORY_GROQ_DEFINITION],
+      openrouterDefinitions: [THREAT_INTEL_GROQ_DEFINITION, REGULATORY_GROQ_DEFINITION],
+      registry: {} as ToolRegistry, // Empty registry — all names will be unregistered
+    };
+
     await fc.assert(
       fc.asyncProperty(
         fc.string({ minLength: 1, maxLength: 50 }).filter(s => 
@@ -80,8 +97,8 @@ describe('Property 7: Unregistered function produces error Function_Response', (
           let callCount = 0;
           fetchMock.mockImplementation(async () => {
             callCount++;
-            if (callCount <= 2) {
-              // Initial call — returns a function call with unregistered name
+            if (callCount <= 1) {
+              // Initial Gemini call — returns a function call with unregistered name
               return {
                 ok: true,
                 json: async () => ({
@@ -112,7 +129,7 @@ describe('Property 7: Unregistered function produces error Function_Response', (
             }
           });
 
-          await getAgentDrift(snapshotA, snapshotB);
+          await callWriterLLM('system prompt', 'user prompt', toolConfig);
 
           // Verify console.warn was called with the unregistered function name
           expect(consoleWarnSpy).toHaveBeenCalledWith(

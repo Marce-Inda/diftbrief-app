@@ -910,7 +910,7 @@ describe('Feature: openrouter-fallback-provider, Property 8: Error messages are 
     fc.assert(
       fc.property(
         fc.string({ minLength: 1, maxLength: 50 }),
-        fc.string({ minLength: 1, maxLength: 50 }).filter(s => !/\s/.test(s) && s.length > 0),
+        fc.string({ minLength: 1, maxLength: 50 }).filter(s => !/\s/.test(s) && s.length > 0 && !s.includes('[REDACTED]') && s !== '[REDACTED'  && !'[REDACTED]'.includes(s)),
         fc.string({ minLength: 0, maxLength: 50 }),
         (prefix, token, suffix) => {
           const input = `${prefix} Bearer ${token} ${suffix}`;
@@ -1035,7 +1035,7 @@ describe('Feature: openrouter-fallback-provider, Property 8: Error messages are 
     fc.assert(
       fc.property(
         fc.string({ minLength: 0, maxLength: 30 }),
-        fc.string({ minLength: 1, maxLength: 40 }).filter(s => !/\s/.test(s) && s.length > 0),
+        fc.string({ minLength: 1, maxLength: 40 }).filter(s => !/\s/.test(s) && s.length > 0 && !'[REDACTED]'.startsWith(s)),
         fc.string({ minLength: 0, maxLength: 30 }),
         (prefix, headerValue, suffix) => {
           const input = `${prefix} Authorization: ${headerValue} ${suffix}`;

@@ -1,13 +1,15 @@
 /**
- * @fileoverview Unit tests for the ReAct loop behavior in agentService.
- * Tests the full Gemini and Groq tool-calling loop through the exported
+ * @fileoverview Unit tests for the single-pass orchestration in agentService.
+ * Tests the unified Gemini → Groq → Local sequential fallback through the exported
  * `getAgentDrift` function by mocking global `fetch`.
+ *
+ * Each test dynamically imports agentService to get a fresh module instance
+ * (avoiding stale in-memory driftCache between tests).
  *
  * Validates: Requirements 5.1, 5.2, 5.4, 5.5, 6.1, 6.3
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getAgentDrift } from '../agentService';
 import type { Snapshot } from '../../types';
 import snapshots from '../../data/snapshots.json';
 
@@ -33,12 +35,13 @@ const snapshotB = snapshots[1] as unknown as Snapshot;
 vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
 vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
 
-describe('AgentService ReAct Loop', () => {
+describe('AgentService Single-Pass Orchestration', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
   let consoleInfoSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.resetModules();
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -55,188 +58,106 @@ describe('AgentService ReAct Loop', () => {
   });
 
   /**
-   * Req 5.2: When no Function_Call is present in the LLM response,
-   * the loop returns the text directly without executing any tool.
+   * Req 5.2: When Gemini returns a valid unified response, the briefings
+   * are extracted and returned with source 'gemini'.
    */
-  it('returns text directly when no Function_Call present (Req 5.2)', async () => {
-    const briefingText = '{"briefing":"Direct text briefing without tool call"}';
+  it('returns unified briefing from Gemini with structured response (Req 5.2)', async () => {
+    const unifiedResponse = JSON.stringify({
+      socBriefing: 'SOC technical briefing from Gemini',
+      cisoBriefing: 'CISO executive briefing from Gemini',
+      urgentDecision: 'Immediate containment required',
+    });
 
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
-        candidates: [{ content: { parts: [{ text: briefingText }] } }],
+        candidates: [{ content: { parts: [{ text: unifiedResponse }] } }],
+        usageMetadata: { totalTokenCount: 500 },
       }),
     });
 
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
     expect(result.drift).toBeDefined();
     expect(result.source).toBe('gemini');
-    // The briefing should come from the mocked LLM response
-    expect(result.drift.socBriefing).toBe('Direct text briefing without tool call');
-    expect(result.drift.cisoBriefing).toBe('Direct text briefing without tool call');
+    expect(result.drift.socBriefing).toBe('SOC technical briefing from Gemini');
+    expect(result.drift.cisoBriefing).toBe('CISO executive briefing from Gemini');
   });
 
   /**
-   * Req 5.1, 5.5: Full Gemini ReAct loop — first call returns functionCall,
-   * tool executes, follow-up returns enriched text.
+   * Req 5.1, 5.5: Single call architecture — getAgentDrift makes exactly
+   * one fetch call to Gemini when it succeeds on the first try.
    */
-  it('completes full Gemini ReAct loop with tool execution (Req 5.1, 5.5)', async () => {
-    fetchMock.mockImplementation(async (_url: string, options: RequestInit) => {
-      const body = JSON.parse(options.body as string);
-
-      // Distinguish initial call vs follow-up by checking contents structure.
-      // Follow-up calls have multiple content entries (user, model functionCall, function response)
-      const isFollowUp = Array.isArray(body.contents) && body.contents.length > 1;
-
-      if (isFollowUp) {
-        // Follow-up call — returns enriched text response
-        return {
-          ok: true,
-          json: async () => ({
-            candidates: [{
-              content: {
-                parts: [{
-                  text: '{"briefing":"Enriched briefing with threat intel data from APT-29"}',
-                }],
-              },
-            }],
-          }),
-        };
-      } else {
-        // Initial call — returns functionCall
-        return {
-          ok: true,
-          json: async () => ({
-            candidates: [{
-              content: {
-                parts: [{
-                  functionCall: {
-                    name: 'queryThreatIntelligence',
-                    args: { ioc: '91.218.114.77' },
-                  },
-                }],
-              },
-            }],
-          }),
-        };
-      }
+  it('makes exactly one API call when Gemini succeeds (Req 5.1, 5.5)', async () => {
+    const unifiedResponse = JSON.stringify({
+      socBriefing: 'SOC briefing with MITRE ATT&CK context',
+      cisoBriefing: 'CISO briefing with regulatory analysis',
+      urgentDecision: 'Escalate to incident commander',
     });
 
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: unifiedResponse }] } }],
+        usageMetadata: { totalTokenCount: 450 },
+      }),
+    });
+
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
     expect(result.source).toBe('gemini');
-    expect(result.drift.socBriefing).toBe('Enriched briefing with threat intel data from APT-29');
-    expect(result.drift.cisoBriefing).toBe('Enriched briefing with threat intel data from APT-29');
-    // Verify fetch was called multiple times (initial + follow-up for each agent)
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    // Only one fetch call (single-pass, no parallel calls)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   /**
-   * Req 5.5: Full Groq ReAct loop — Gemini fails (no API key),
-   * Groq does tool calling successfully.
+   * Req 5.5: Groq fallback — Gemini fails (no API key),
+   * Groq returns a valid unified response.
    */
-  it('completes full Groq ReAct loop when Gemini unavailable (Req 5.5)', async () => {
+  it('falls back to Groq when Gemini unavailable (Req 5.5)', async () => {
     // Remove Gemini key to force Groq fallback
     vi.stubEnv('VITE_GEMINI_API_KEY', '');
 
-    let groqCallCount = 0;
-
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('groq.com')) {
-        groqCallCount++;
-        if (groqCallCount === 1 || groqCallCount === 3) {
-          // Initial Groq call — returns tool_calls
-          return {
-            ok: true,
-            json: async () => ({
-              choices: [{
-                message: {
-                  tool_calls: [{
-                    id: 'call_1',
-                    type: 'function',
-                    function: {
-                      name: 'queryRegulatoryPrecedents',
-                      arguments: '{"regulation":"GDPR"}',
-                    },
-                  }],
-                },
-              }],
-            }),
-          };
-        } else {
-          // Follow-up Groq call — returns text response
-          return {
-            ok: true,
-            json: async () => ({
-              choices: [{
-                message: {
-                  content: '{"briefing":"Regulatory briefing with GDPR precedent data"}',
-                },
-              }],
-            }),
-          };
-        }
-      }
-      return { ok: false, json: async () => ({}) };
+    const unifiedResponse = JSON.stringify({
+      socBriefing: 'SOC briefing from Groq fallback',
+      cisoBriefing: 'CISO briefing with GDPR precedent data',
+      urgentDecision: 'Notify DPA within 72 hours',
     });
 
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: unifiedResponse,
+          },
+        }],
+        usage: { total_tokens: 350 },
+      }),
+    });
+
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
     expect(result.source).toBe('groq');
-    expect(result.drift.cisoBriefing).toBe('Regulatory briefing with GDPR precedent data');
+    expect(result.drift.cisoBriefing).toBe('CISO briefing with GDPR precedent data');
   });
 
   /**
-   * Req 5.4: When the follow-up response still contains a Function_Call,
-   * the loop terminates (max iterations reached) and falls through.
+   * Req 5.4: When both Gemini and Groq fail, the system uses local
+   * deterministic fallback and sets fallbackReason.
    */
-  it('terminates loop when follow-up still has Function_Call (Req 5.4)', async () => {
-    // Make Gemini always return functionCall (even in follow-up)
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('generativelanguage.googleapis.com')) {
-        return {
-          ok: true,
-          json: async () => ({
-            candidates: [{
-              content: {
-                parts: [{
-                  functionCall: {
-                    name: 'queryThreatIntelligence',
-                    args: { ioc: '185.220.101.34' },
-                  },
-                }],
-              },
-            }],
-          }),
-        };
-      }
-      // Groq also returns tool_calls in follow-up to trigger max iterations
-      if (url.includes('groq.com')) {
-        return {
-          ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                tool_calls: [{
-                  id: 'call_loop',
-                  type: 'function',
-                  function: {
-                    name: 'queryThreatIntelligence',
-                    arguments: '{"ioc":"185.220.101.34"}',
-                  },
-                }],
-              },
-            }],
-          }),
-        };
-      }
-      return { ok: false, json: async () => ({}) };
-    });
+  it('uses deterministic local fallback when all providers fail (Req 5.4)', async () => {
+    // Remove both API keys
+    vi.stubEnv('VITE_GEMINI_API_KEY', '');
+    vi.stubEnv('VITE_GROQ_API_KEY', '');
 
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
-    // Should fall back to local deterministic source since both providers loop infinitely
+    // Should fall back to local deterministic source
     expect(result.source).toBe('local');
     // Deterministic fallback briefings should be present
     expect(result.drift.socBriefing).toBeDefined();
@@ -245,55 +166,34 @@ describe('AgentService ReAct Loop', () => {
   });
 
   /**
-   * Req 6.3: Max iteration warning is logged when follow-up returns another function call.
+   * Req 6.3: Validation failure warning is logged when LLM response
+   * doesn't pass unified response validation.
    */
-  it('logs max iteration warning when loop is terminated (Req 6.3)', async () => {
-    // Same setup as the loop termination test — Gemini always returns functionCall
+  it('logs validation failure warning and falls back (Req 6.3)', async () => {
+    // Gemini returns invalid response (missing urgentDecision)
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes('generativelanguage.googleapis.com')) {
         return {
           ok: true,
           json: async () => ({
-            candidates: [{
-              content: {
-                parts: [{
-                  functionCall: {
-                    name: 'queryThreatIntelligence',
-                    args: { ioc: '185.220.101.34' },
-                  },
-                }],
-              },
-            }],
+            candidates: [{ content: { parts: [{ text: '{"socBriefing":"ok","cisoBriefing":"ok"}' }] } }],
           }),
         };
       }
-      if (url.includes('groq.com')) {
-        return {
-          ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                tool_calls: [{
-                  id: 'call_loop',
-                  type: 'function',
-                  function: {
-                    name: 'queryThreatIntelligence',
-                    arguments: '{"ioc":"185.220.101.34"}',
-                  },
-                }],
-              },
-            }],
-          }),
-        };
-      }
+      // Groq also unavailable
       return { ok: false, json: async () => ({}) };
     });
 
-    await getAgentDrift(snapshotA, snapshotB);
+    // Remove Groq key so it skips Groq
+    vi.stubEnv('VITE_GROQ_API_KEY', '');
 
-    // Verify the max iterations warning was logged
+    const { getAgentDrift } = await import('../agentService');
+    const result = await getAgentDrift(snapshotA, snapshotB);
+
+    // Should fall back to local since Gemini response was invalid
+    expect(result.source).toBe('local');
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      '[AgentService] callWriterLLM: max iterations (2) reached'
+      '[Orchestrator] Gemini response validation failed, trying Groq...'
     );
   });
 
@@ -301,13 +201,20 @@ describe('AgentService ReAct Loop', () => {
    * Req 6.1: Orchestrator logs routing info at each step.
    */
   it('logs orchestrator routing context (Req 6.1)', async () => {
+    const unifiedResponse = JSON.stringify({
+      socBriefing: 'test soc',
+      cisoBriefing: 'test ciso',
+      urgentDecision: 'test decision',
+    });
+
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
-        candidates: [{ content: { parts: [{ text: '{"briefing":"test"}' }] } }],
+        candidates: [{ content: { parts: [{ text: unifiedResponse }] } }],
       }),
     });
 
+    const { getAgentDrift } = await import('../agentService');
     await getAgentDrift(snapshotA, snapshotB);
 
     // Verify orchestrator logged routing info

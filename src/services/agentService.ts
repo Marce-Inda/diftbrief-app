@@ -11,6 +11,9 @@ import { calculateDrift } from './driftComparator';
 import { routeContextLocally } from './localRouter';
 import { queryThreatIntelligence, queryRegulatoryPrecedents } from './tools';
 
+// Re-export tool functions to keep them available for tests and future use
+export { queryThreatIntelligence, queryRegulatoryPrecedents };
+
 /** Fuente que generó el drift */
 export type DriftSource = 'gemini' | 'groq' | 'openrouter' | 'local';
 
@@ -39,6 +42,16 @@ interface RouterContext {
 /** Respuesta esperada de un Agente Redactor */
 interface WriterResponse {
   briefing: string;
+}
+
+/** Structured response from the unified single-pass LLM call */
+interface UnifiedLLMResponse {
+  /** SOC technical briefing text */
+  socBriefing: string;
+  /** CISO executive briefing text */
+  cisoBriefing: string;
+  /** Urgent decision summary text */
+  urgentDecision: string;
 }
 
 // ─── Tool-Calling Type Definitions ────────────────────────────────────────────
@@ -159,19 +172,22 @@ const WRITER_RESPONSE_SCHEMA = {
 } as const;
 
 const GROQ_WRITER_SCHEMA = {
-  type: 'json_schema' as const,
-  json_schema: {
-    name: 'writer_response',
-    strict: true,
-    schema: {
-      type: 'object',
-      properties: {
-        briefing: { type: 'string', description: 'Texto del briefing generado para el rol correspondiente' },
-      },
-      required: ['briefing'],
-      additionalProperties: false,
-    },
+  type: 'json_object' as const,
+};
+
+const UNIFIED_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    socBriefing: { type: 'STRING', description: 'SOC technical incident briefing text' },
+    cisoBriefing: { type: 'STRING', description: 'CISO executive risk briefing text' },
+    urgentDecision: { type: 'STRING', description: 'Urgent decision summary for the current escalation' },
   },
+  required: ['socBriefing', 'cisoBriefing', 'urgentDecision'],
+  propertyOrdering: ['socBriefing', 'cisoBriefing', 'urgentDecision'],
+} as const;
+
+const GROQ_UNIFIED_SCHEMA = {
+  type: 'json_object' as const,
 };
 
 // ─── Telemetry Metadata Types ─────────────────────────────────────────────────
@@ -197,6 +213,9 @@ interface LLMCallResult {
   metadata: LLMCallMetadata;
 }
 
+/** In-memory cache indexed by Transition_Key (fromId-toId). Prevents redundant API calls. */
+const driftCache = new Map<string, AgentDriftResult>();
+
 // ─── Utilidades de Llamada LLM (Solo Agentes Redactores) ──────────────────────
 
 /**
@@ -214,7 +233,8 @@ async function callGemini(
   systemPrompt: string,
   userPrompt: string,
   toolDeclarations?: GeminiFunctionDeclaration[],
-  _toolRegistry?: ToolRegistry
+  _toolRegistry?: ToolRegistry,
+  responseSchema?: typeof UNIFIED_RESPONSE_SCHEMA
 ): Promise<LLMCallResult | null> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) return null;
@@ -229,9 +249,9 @@ async function callGemini(
     };
 
     if (!toolDeclarations || toolDeclarations.length === 0) {
-      // Structured output mode (existing behavior)
+      // Structured output mode (existing behavior or custom schema override)
       generationConfig.responseMimeType = 'application/json';
-      generationConfig.responseSchema = WRITER_RESPONSE_SCHEMA;
+      generationConfig.responseSchema = responseSchema || WRITER_RESPONSE_SCHEMA;
     }
 
     // Build request body
@@ -314,7 +334,8 @@ async function callGroq(
   systemPrompt: string,
   userPrompt: string,
   toolDefinitions?: GroqToolDefinition[],
-  _toolRegistry?: ToolRegistry
+  _toolRegistry?: ToolRegistry,
+  responseFormat?: { type: string }
 ): Promise<LLMCallResult | null> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
   if (!apiKey) return null;
@@ -337,8 +358,8 @@ async function callGroq(
       // Tool calling mode: include tools array, omit response_format
       requestBody.tools = toolDefinitions;
     } else {
-      // Structured output mode (existing behavior)
-      requestBody.response_format = GROQ_WRITER_SCHEMA;
+      // Structured output mode (existing behavior or custom schema override)
+      requestBody.response_format = responseFormat || GROQ_WRITER_SCHEMA;
     }
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -849,7 +870,7 @@ async function handleFunctionCall(
  * @param toolConfig - Configuración opcional de herramientas para el ReAct loop
  * @returns Object with text, source, and metadata or null si ambos fallan
  */
-async function callWriterLLM(
+export async function callWriterLLM(
   systemPrompt: string,
   userPrompt: string,
   toolConfig?: ToolConfig
@@ -1044,7 +1065,7 @@ export function buildCISOSystemPrompt(): string {
  * @param playbooks - Playbooks de respuesta aplicables
  * @returns Prompt con contexto técnico completo
  */
-function buildSOCPrompt(drift: Drift, mitreTactic: MitreAttackTactic, playbooks: IncidentPlaybook[]): string {
+export function buildSOCPrompt(drift: Drift, mitreTactic: MitreAttackTactic, playbooks: IncidentPlaybook[]): string {
   const playbookText = playbooks.map(pb =>
     `[${pb.name}] (Aplicar cuando: ${pb.applicableWhen})\nPasos:\n${pb.steps.map(s => `  ${s.order}. ${s.action}: ${s.detail}`).join('\n')}`
   ).join('\n\n');
@@ -1098,7 +1119,7 @@ DIRECTIVAS CONSTITUCIONALES (ANTI-ALUCINACIÓN):
  * @param regulation - Regulación seleccionada por el enrutador
  * @returns Prompt con contexto regulatorio completo
  */
-function buildCISOPrompt(drift: Drift, regulation: Regulation): string {
+export function buildCISOPrompt(drift: Drift, regulation: Regulation): string {
   const articlesText = regulation.keyArticles
     .map(a => `  - ${a.id} (${a.title}): ${a.summary}`)
     .join('\n');
@@ -1134,7 +1155,7 @@ Genera un briefing ejecutivo CISO que:
  * @param parsed - Objeto parseado del JSON
  * @returns Briefing validado o null
  */
-function validateWriterResponse(parsed: unknown): WriterResponse | null {
+export function validateWriterResponse(parsed: unknown): WriterResponse | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
 
@@ -1142,6 +1163,172 @@ function validateWriterResponse(parsed: unknown): WriterResponse | null {
     return { briefing: obj.briefing.trim() };
   }
   return null;
+}
+
+// ─── Unified Single-Pass Prompt & Validation ─────────────────────────────────
+
+/**
+ * Builds a unified system prompt combining SOC and CISO directives for single-pass briefing generation.
+ * @returns System prompt instructing the LLM to return a structured JSON with both briefings
+ */
+function buildUnifiedSystemPrompt(): string {
+  return `Eres un experto dual en ciberseguridad: tanto analista SOC senior como asesor ejecutivo CISO.
+Genera un objeto JSON con EXACTAMENTE estos tres campos:
+
+1. "socBriefing": Briefing técnico para el equipo SOC. Incluye:
+   - Nuevos hechos confirmados con nivel de confianza
+   - Nuevos IOCs detectados (tipo y valor)
+   - Acciones prioritarias de contención citando MITRE ATT&CK
+   - Referencia a playbooks aplicables con pasos específicos
+
+2. "cisoBriefing": Briefing ejecutivo para el CISO. Incluye:
+   - Evaluación de riesgo con cambio de severidad
+   - Impacto regulatorio citando la regulación aplicable, multas y plazos
+   - Decisión urgente requerida con deadline e impacto de inacción
+   - Acciones estratégicas priorizadas
+
+3. "urgentDecision": Resumen conciso (1-2 oraciones) de la decisión más urgente.
+
+REGLAS ESTRICTAS:
+- Responde ÚNICAMENTE con un objeto JSON válido con los tres campos.
+- NO incluyas markdown, comentarios ni texto fuera del JSON.
+- NO inventes datos, IOCs, hashes, IPs, regulaciones ni multas que no estén en el contexto proporcionado.
+- Cada afirmación DEBE ser trazable a un dato del drift o la base de conocimiento provista.
+- Si un dato no está disponible, indica "información no disponible" en lugar de inventarlo.`;
+}
+
+/**
+ * Builds the unified user prompt merging drift data, MITRE tactic, regulation, and playbooks.
+ * @param drift - Calculated drift between snapshots
+ * @param context - Router context with regulation, MITRE tactic, and playbooks
+ * @returns User prompt with complete incident context for unified briefing generation
+ */
+function buildUnifiedUserPrompt(drift: Drift, context: RouterContext): string {
+  const playbookText = context.playbooks.map(pb =>
+    `[${pb.name}] (Aplicar cuando: ${pb.applicableWhen})\nPasos:\n${pb.steps.map(s => `  ${s.order}. ${s.action}: ${s.detail}`).join('\n')}`
+  ).join('\n\n');
+
+  const articlesText = context.regulation.keyArticles
+    .map(a => `  - ${a.id} (${a.title}): ${a.summary}`)
+    .join('\n');
+
+  return `DRIFT DEL INCIDENTE:
+- Headline: ${drift.headline}
+- Severidad: ${drift.severityChange.from} → ${drift.severityChange.to} (${drift.severityChange.justification})
+- Nuevos hechos (${drift.newFacts.length}): ${drift.newFacts.map(f => `[${f.confidence}] ${f.description}`).join('; ')}
+- Nuevos IOCs (${drift.newIOCs.length}): ${drift.newIOCs.map(i => `[${i.type}] ${i.value} — ${i.description}`).join('; ')}
+- Giros de confianza: ${drift.confidenceShifts.map(s => `${s.description}: ${s.from}→${s.to}`).join('; ') || 'Ninguno'}
+- Decisión urgente: ${drift.urgentDecision.title} — ${drift.urgentDecision.description}
+- Deadline: ${drift.urgentDecision.deadline}
+- Impacto de no actuar: ${drift.urgentDecision.impact}
+
+TÁCTICA MITRE ATT&CK APLICABLE:
+- ID: ${context.mitreTactic.id}
+- Nombre: ${context.mitreTactic.name}
+- Descripción: ${context.mitreTactic.description}
+- Técnicas comunes: ${context.mitreTactic.commonTechniques.join(', ')}
+- Mitigaciones: ${context.mitreTactic.mitigations.join('; ')}
+
+REGULACIÓN APLICABLE:
+- Nombre: ${context.regulation.name} (${context.regulation.id.toUpperCase()})
+- Jurisdicción: ${context.regulation.jurisdiction}
+- Ámbito: ${context.regulation.scope}
+- Deadline de notificación: ${context.regulation.notificationDeadlineHours !== null ? `${context.regulation.notificationDeadlineHours} horas` : 'No especificado'}
+- Sanciones: ${context.regulation.penalties}
+- Artículos clave:
+${articlesText}
+
+PLAYBOOKS DE RESPUESTA:
+${playbookText}
+
+Genera el JSON con los tres campos: socBriefing, cisoBriefing, urgentDecision.`;
+}
+
+/**
+ * Sanitizes a raw LLM response string by removing markdown code fences,
+ * leading/trailing whitespace, and other common LLM output artifacts.
+ * @param raw - Raw text response from the LLM
+ * @returns Clean JSON string ready for JSON.parse()
+ */
+function sanitizeLLMJsonResponse(raw: string): string {
+  let cleaned = raw.trim();
+  // Remove markdown code fences: ```json ... ``` or ``` ... ```
+  if (cleaned.startsWith('```')) {
+    // Remove opening fence (with optional language tag)
+    cleaned = cleaned.replace(/^```(?:json|JSON)?\s*\n?/, '');
+    // Remove closing fence
+    cleaned = cleaned.replace(/\n?\s*```\s*$/, '');
+  }
+  // Remove any BOM or zero-width characters
+  cleaned = cleaned.replace(/^\uFEFF/, '');
+  // Trim again after removal
+  return cleaned.trim();
+}
+
+/**
+ * Coerces a field value to a non-empty string.
+ * If the value is already a string, returns it trimmed.
+ * If the value is an object or array, serializes it to a readable string.
+ * Returns null if the value is empty, null, or undefined.
+ * @param value - Raw field value from LLM response
+ * @returns Coerced string or null
+ */
+function coerceToString(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (value !== null && value !== undefined && typeof value === 'object') {
+    // LLM returned a structured object instead of a plain string
+    // Serialize it to a readable format
+    const serialized = JSON.stringify(value, null, 2);
+    return serialized.length > 2 ? serialized : null; // "{}" or "[]" are considered empty
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return null;
+}
+
+/**
+ * Validates the unified LLM response contains all required non-empty fields.
+ * Accepts common field name variations produced by LLMs (socView/socBriefing, cisoView/cisoBriefing).
+ * Fields can be strings OR objects (objects are serialized to string).
+ * Logs the exact validation failure reason for diagnostics.
+ * @param parsed - Parsed JSON object from LLM response
+ * @returns Validated UnifiedLLMResponse or null if validation fails
+ */
+function validateUnifiedResponse(parsed: unknown): UnifiedLLMResponse | null {
+  if (!parsed || typeof parsed !== 'object') {
+    console.warn('[Orchestrator] validateUnifiedResponse: input is not an object:', typeof parsed);
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+
+  // Accept field name variations commonly produced by LLMs
+  const rawSoc = obj.socBriefing ?? obj.socView ?? obj.soc_briefing ?? obj.SOCBriefing;
+  const rawCiso = obj.cisoBriefing ?? obj.cisoView ?? obj.ciso_briefing ?? obj.CISOBriefing;
+  const rawDecision = obj.urgentDecision ?? obj.urgent_decision ?? obj.decision ?? obj.urgentAction;
+
+  // Coerce fields (accept both strings and structured objects)
+  const socBriefing = coerceToString(rawSoc);
+  const cisoBriefing = coerceToString(rawCiso);
+  const urgentDecision = coerceToString(rawDecision);
+
+  if (!socBriefing) {
+    console.warn('[Orchestrator] validateUnifiedResponse failed: socBriefing missing or empty. Keys found:', Object.keys(obj).join(', '), '| typeof:', typeof rawSoc);
+    return null;
+  }
+  if (!cisoBriefing) {
+    console.warn('[Orchestrator] validateUnifiedResponse failed: cisoBriefing missing or empty. Keys found:', Object.keys(obj).join(', '), '| typeof:', typeof rawCiso);
+    return null;
+  }
+  if (!urgentDecision) {
+    console.warn('[Orchestrator] validateUnifiedResponse failed: urgentDecision missing or empty. Keys found:', Object.keys(obj).join(', '), '| typeof:', typeof rawDecision);
+    return null;
+  }
+
+  return { socBriefing, cisoBriefing, urgentDecision };
 }
 
 // ─── Orquestador Principal ────────────────────────────────────────────────────
@@ -1166,113 +1353,107 @@ function computeEstimatedCost(tokensConsumed: number | null, source: DriftSource
 }
 
 /**
- * Calcula el drift usando la arquitectura Multi-Agente RAG:
- * 1. Motor determinista local calcula el drift base
- * 2. Agente Enrutador selecciona contexto relevante de la Knowledge Base
- * 3. Agentes Redactores (SOC + CISO) generan briefings en paralelo fundamentados en datos reales
+ * Calcula el drift usando arquitectura Single-Pass:
+ * 1. Verifica caché en memoria (retorno inmediato si existe)
+ * 2. Motor determinista local calcula el drift base
+ * 3. Enrutador Local selecciona contexto relevante
+ * 4. Una sola llamada LLM con prompt unificado (Gemini → Groq → Local)
+ * 5. Almacena resultado en caché
  *
- * Garantiza que SIEMPRE retorna un resultado válido gracias al fallback determinista.
- * Captures telemetry metadata (latency, tokens, cost) from API calls when available.
+ * Garantiza SIEMPRE un resultado válido gracias al fallback determinista.
  * @param from - Snapshot de origen
  * @param to - Snapshot de destino
  * @returns Resultado del drift con metadatos de fuente y telemetría
  */
 export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<AgentDriftResult> {
-  // Paso 1: Calcular drift base con motor determinista (siempre funciona)
+  const cacheKey = `${from.id}-${to.id}`;
+
+  // 1. Cache check — return immediately if already computed
+  const cached = driftCache.get(cacheKey);
+  if (cached) {
+    console.info(`[Orchestrator] Cache hit for ${cacheKey}`);
+    return cached;
+  }
+
+  // 2. Calculate base drift with deterministic engine
   const baseDrift = calculateDrift(from, to);
 
-  // Paso 2: Enrutador Local selecciona contexto de la Knowledge Base (latencia ~0ms)
+  // 3. Local routing for knowledge base context
   const routerStart = performance.now();
   const context = getIncidentContext(baseDrift);
   const routerMs = (performance.now() - routerStart).toFixed(2);
   console.info(`[Orchestrator] Contexto enrutado localmente en ${routerMs}ms: ${context.regulation.name} + ${context.mitreTactic.name}`);
 
-  // Paso 3: Agentes Redactores en paralelo (SOC + CISO)
-  const socPrompt = buildSOCPrompt(baseDrift, context.mitreTactic, context.playbooks);
-  const cisoPrompt = buildCISOPrompt(baseDrift, context.regulation);
+  // 4. Build unified prompts
+  const systemPrompt = buildUnifiedSystemPrompt();
+  const userPrompt = buildUnifiedUserPrompt(baseDrift, context);
 
-  // Build tool configs for each agent (Requirement 3.1, 3.2, 4.1, 4.4)
-  const socToolConfig: ToolConfig = {
-    geminiDeclarations: [THREAT_INTEL_GEMINI_DECLARATION],
-    groqDefinitions: [THREAT_INTEL_GROQ_DEFINITION],
-    openrouterDefinitions: [THREAT_INTEL_GROQ_DEFINITION],
-    registry: { queryThreatIntelligence: (args) => queryThreatIntelligence(args.ioc) },
-  };
-
-  const cisoToolConfig: ToolConfig = {
-    geminiDeclarations: [REGULATORY_GEMINI_DECLARATION],
-    groqDefinitions: [REGULATORY_GROQ_DEFINITION],
-    openrouterDefinitions: [REGULATORY_GROQ_DEFINITION],
-    registry: { queryRegulatoryPrecedents: (args) => queryRegulatoryPrecedents(args.regulation) },
-  };
-
-  const [socResult, cisoResult] = await Promise.all([
-    callWriterLLM(buildSOCSystemPrompt(baseDrift), socPrompt, socToolConfig),
-    callWriterLLM(buildCISOSystemPrompt(), cisoPrompt, cisoToolConfig),
-  ]);
-
-  // Determinar fuente (prioridad: si alguno usó Gemini, reportar Gemini)
-  let source: DriftSource;
+  // 5. Sequential fallback: Gemini → Groq → Local (NO parallel, NO retry)
+  let source: DriftSource = 'local';
   let fallbackReason: string | undefined;
   let telemetry: TelemetryData | undefined;
+  let socBriefing = baseDrift.socBriefing;
+  let cisoBriefing = baseDrift.cisoBriefing;
 
-  const socBriefing = extractBriefing(socResult, baseDrift.socBriefing);
-  const cisoBriefing = extractBriefing(cisoResult, baseDrift.cisoBriefing);
+  // Try Gemini first
+  const geminiResult = await callGemini(systemPrompt, userPrompt, undefined, undefined, UNIFIED_RESPONSE_SCHEMA);
+  if (geminiResult) {
+    try {
+      const cleanedText = sanitizeLLMJsonResponse(geminiResult.text);
+      const parsed = JSON.parse(cleanedText);
+      const validated = validateUnifiedResponse(parsed);
+      if (validated) {
+        socBriefing = validated.socBriefing;
+        cisoBriefing = validated.cisoBriefing;
+        source = 'gemini';
+        telemetry = {
+          tokensConsumed: geminiResult.metadata.tokensConsumed,
+          latencyMs: geminiResult.metadata.latencyMs,
+          estimatedCost: computeEstimatedCost(geminiResult.metadata.tokensConsumed, 'gemini'),
+        };
+      } else {
+        console.warn('[Orchestrator] Gemini response validation failed, trying Groq...');
+      }
+    } catch (e) {
+      console.warn('[Orchestrator] Gemini response parse error, trying Groq...', (e as Error).message);
+    }
+  }
 
-  if (socResult || cisoResult) {
-    // Priority: gemini > groq > openrouter > local
-    if (socResult?.source === 'gemini' || cisoResult?.source === 'gemini') {
-      source = 'gemini';
-    } else if (socResult?.source === 'groq' || cisoResult?.source === 'groq') {
-      source = 'groq';
-    } else if (socResult?.source === 'openrouter' || cisoResult?.source === 'openrouter') {
-      source = 'openrouter';
+  // Try Groq only if Gemini didn't succeed
+  if (source === 'local') {
+    const groqResult = await callGroq(systemPrompt, userPrompt, undefined, undefined, GROQ_UNIFIED_SCHEMA);
+    if (groqResult) {
+      try {
+        const cleanedText = sanitizeLLMJsonResponse(groqResult.text);
+        const parsed = JSON.parse(cleanedText);
+        const validated = validateUnifiedResponse(parsed);
+        if (validated) {
+          socBriefing = validated.socBriefing;
+          cisoBriefing = validated.cisoBriefing;
+          source = 'groq';
+          telemetry = {
+            tokensConsumed: groqResult.metadata.tokensConsumed,
+            latencyMs: groqResult.metadata.latencyMs,
+            estimatedCost: computeEstimatedCost(groqResult.metadata.tokensConsumed, 'groq'),
+          };
+        } else {
+          console.warn('[Orchestrator] Groq response validation failed, using deterministic fallback.');
+          fallbackReason = 'All providers failed validation. Using deterministic local engine.';
+        }
+      } catch (e) {
+        console.warn('[Orchestrator] Groq response parse error, using deterministic fallback.', (e as Error).message);
+        fallbackReason = 'All providers failed (parse errors). Using deterministic local engine.';
+      }
     } else {
-      source = 'local';
+      fallbackReason = 'All remote providers unavailable (Gemini → Groq). Using deterministic local engine.';
+      console.warn('[Orchestrator] Graceful degradation: Gemini and Groq unavailable. Deterministic fallback used.');
     }
-
-    if (source === 'openrouter') {
-      fallbackReason = 'Gemini and Groq failed; OpenRouter served the response.';
-    }
-
-    if (!socResult || !cisoResult) {
-      const failedAgent = !socResult ? 'SOC' : 'CISO';
-      const usedProvider = socResult?.source || cisoResult?.source || 'unknown';
-      fallbackReason = `${failedAgent} agent: Gemini, Groq, and OpenRouter failed (provider_unavailable). Deterministic fallback used. Active provider for other agent: ${usedProvider}.`;
-      console.warn(`[Orchestrator] Graceful degradation: ${failedAgent} agent fell back to deterministic output. Gemini → Groq → OpenRouter → Deterministic chain exhausted.`);
-    }
-
-    // Aggregate telemetry from successful API calls
-    const allMetadata: LLMCallMetadata[] = [];
-    if (socResult) allMetadata.push(socResult.metadata);
-    if (cisoResult) allMetadata.push(cisoResult.metadata);
-
-    // Compute aggregate latency (max of parallel calls represents wall-clock time)
-    const latencyMs = allMetadata.length > 0
-      ? Math.max(...allMetadata.map(m => m.latencyMs))
-      : null;
-
-    // Compute aggregate tokens (sum of all calls, null if none reported tokens)
-    const tokenValues = allMetadata
-      .map(m => m.tokensConsumed)
-      .filter((t): t is number => t !== null);
-    const tokensConsumed = tokenValues.length > 0 ? tokenValues.reduce((a, b) => a + b, 0) : null;
-
-    // Compute estimated cost from aggregate tokens
-    const estimatedCost = computeEstimatedCost(tokensConsumed, source);
-
-    telemetry = { tokensConsumed, latencyMs, estimatedCost };
-  } else {
-    source = 'local';
-    fallbackReason = 'All providers failed (Gemini → Groq → OpenRouter): provider_unavailable. Full deterministic fallback used for SOC and CISO agents.';
-    console.warn('[Orchestrator] Graceful degradation: Both SOC and CISO agents fell back to deterministic output. Gemini, Groq, and OpenRouter unavailable.');
-    // Local deterministic fallback: telemetry is undefined
-    telemetry = undefined;
   }
 
   console.info(`[Orchestrator] ✅ Briefings generados — Fuente: ${source}`);
 
-  return {
+  // 6. Build final result
+  const result: AgentDriftResult = {
     drift: {
       ...baseDrift,
       socBriefing,
@@ -1282,23 +1463,11 @@ export async function getAgentDrift(from: Snapshot, to: Snapshot): Promise<Agent
     fallbackReason,
     telemetry,
   };
+
+  // 7. Store in cache
+  driftCache.set(cacheKey, result);
+
+  return result;
 }
 
-/**
- * Extrae el briefing de la respuesta LLM o usa el fallback local.
- * @param result - Resultado de la llamada LLM (puede ser null)
- * @param fallback - Briefing generado por el motor determinista
- * @returns Briefing final validado
- */
-function extractBriefing(result: { text: string; source: DriftSource; metadata: LLMCallMetadata } | null, fallback: string): string {
-  if (!result) return fallback;
 
-  try {
-    const parsed = JSON.parse(result.text);
-    const validated = validateWriterResponse(parsed);
-    return validated ? validated.briefing : fallback;
-  } catch {
-    console.warn('[Writer] Error parseando respuesta, usando fallback local.');
-    return fallback;
-  }
-}

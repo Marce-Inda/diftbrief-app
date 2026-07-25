@@ -1,13 +1,12 @@
 /**
- * @fileoverview Integration tests for the full OpenRouter fallback chain.
- * Tests the complete Gemini → Groq → OpenRouter → Local fallback sequence
- * with mocked fetch, verifying source priority, telemetry, and cost computation.
+ * @fileoverview Integration tests for the single-pass orchestration fallback chain.
+ * Tests the complete Gemini → Groq → Local sequential fallback for getAgentDrift.
+ * OpenRouter has been REMOVED from the getAgentDrift chain.
  *
  * Validates: Requirements 1.8, 2.1, 2.2, 2.3, 2.4, 2.6, 3.2, 3.4, 4.3
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getAgentDrift } from '../agentService';
 import type { Snapshot } from '../../types';
 import snapshots from '../../data/snapshots.json';
 
@@ -28,7 +27,7 @@ vi.mock('../tools', () => ({
 const snapshotA = snapshots[0] as unknown as Snapshot;
 const snapshotB = snapshots[1] as unknown as Snapshot;
 
-describe('Integration: Full fallback chain Gemini → Groq → OpenRouter → Local', () => {
+describe('Integration: Single-pass fallback chain Gemini → Groq → Local', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -43,15 +42,16 @@ describe('Integration: Full fallback chain Gemini → Groq → OpenRouter → Lo
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    vi.resetModules();
   });
 
   /**
-   * Validates: Requirements 1.8, 2.1, 2.2, 2.3
+   * Validates: Requirements 2.1, 2.2, 2.3
    *
-   * When Gemini and Groq both fail (HTTP error), but OpenRouter succeeds,
-   * the source should be 'openrouter' and the response should contain valid briefings.
+   * When Gemini fails (HTTP error), Groq serves successfully as sequential fallback.
+   * OpenRouter is NOT called by getAgentDrift (removed from chain).
    */
-  it('falls back through Gemini → Groq → OpenRouter successfully', async () => {
+  it('falls back from Gemini to Groq successfully (single-pass)', async () => {
     vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
     vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
     vi.stubEnv('VITE_OPENROUTER_API_KEY', 'test-openrouter-key');
@@ -61,71 +61,38 @@ describe('Integration: Full fallback chain Gemini → Groq → OpenRouter → Lo
       if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
         return { ok: false, status: 500, json: async () => ({}) };
       }
-      // Groq fails with HTTP 503
+      // Groq succeeds with unified response
       if (typeof url === 'string' && url.includes('api.groq.com')) {
-        return { ok: false, status: 503, json: async () => ({}) };
-      }
-      // OpenRouter succeeds
-      if (typeof url === 'string' && url.includes('openrouter.ai')) {
         return {
           ok: true,
           json: async () => ({
             choices: [{
               message: {
-                content: JSON.stringify({ briefing: 'OpenRouter generated briefing for test' }),
+                content: JSON.stringify({
+                  socBriefing: 'SOC technical briefing from Groq',
+                  cisoBriefing: 'CISO executive briefing from Groq',
+                  urgentDecision: 'Immediate containment required',
+                }),
               },
             }],
-            usage: { total_tokens: 150 },
+            usage: { total_tokens: 200 },
           }),
         };
       }
-      return { ok: false, status: 404, json: async () => ({}) };
-    });
-
-    const result = await getAgentDrift(snapshotA, snapshotB);
-
-    expect(result.source).toBe('openrouter');
-    expect(result.drift.socBriefing.length).toBeGreaterThan(0);
-    expect(result.drift.cisoBriefing.length).toBeGreaterThan(0);
-  });
-
-  /**
-   * Validates: Requirements 2.4, 2.6, 3.4
-   *
-   * When OpenRouter key is missing (empty), the provider is skipped entirely
-   * without a network request, and the chain falls through to the local engine.
-   * The fallbackReason should mention all three remote providers.
-   */
-  it('skips OpenRouter when key missing, falls back to local', async () => {
-    vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
-    vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
-    vi.stubEnv('VITE_OPENROUTER_API_KEY', '');
-
-    fetchMock.mockImplementation(async (url: string) => {
-      // Gemini fails
-      if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
-        return { ok: false, status: 500, json: async () => ({}) };
-      }
-      // Groq fails
-      if (typeof url === 'string' && url.includes('api.groq.com')) {
-        return { ok: false, status: 500, json: async () => ({}) };
-      }
-      // OpenRouter should NOT be called since key is empty
+      // OpenRouter should NOT be called by getAgentDrift
       if (typeof url === 'string' && url.includes('openrouter.ai')) {
-        throw new Error('OpenRouter should not be called when key is empty');
+        throw new Error('OpenRouter should NOT be called by getAgentDrift');
       }
       return { ok: false, status: 404, json: async () => ({}) };
     });
 
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
-    expect(result.source).toBe('local');
-    expect(result.fallbackReason).toBeDefined();
-    // The fallbackReason should reference all three providers
-    expect(result.fallbackReason).toMatch(/Gemini/i);
-    expect(result.fallbackReason).toMatch(/Groq/i);
-    expect(result.fallbackReason).toMatch(/OpenRouter/i);
-    // No OpenRouter fetch calls should have been made
+    expect(result.source).toBe('groq');
+    expect(result.drift.socBriefing).toBe('SOC technical briefing from Groq');
+    expect(result.drift.cisoBriefing).toBe('CISO executive briefing from Groq');
+    // OpenRouter was never called
     const openrouterCalls = fetchMock.mock.calls.filter(
       (call) => typeof call[0] === 'string' && call[0].includes('openrouter.ai')
     );
@@ -133,15 +100,12 @@ describe('Integration: Full fallback chain Gemini → Groq → OpenRouter → Lo
   });
 
   /**
-   * Validates: Requirements 3.2, 4.3
+   * Validates: Requirements 2.4, 2.6, 3.4
    *
-   * When OpenRouter serves a response, getAgentDrift should return:
-   * - source: 'openrouter'
-   * - telemetry with latencyMs (positive integer), tokensConsumed, and estimatedCost
-   * - estimatedCost should be 0 (since OpenRouter uses free-tier model)
-   * - fallbackReason should indicate Gemini and Groq failed
+   * OpenRouter is NOT called by getAgentDrift. When both Gemini and Groq fail,
+   * the chain falls through to the local deterministic engine directly.
    */
-  it('returns correct source and telemetry when OpenRouter serves', async () => {
+  it('getAgentDrift does NOT call OpenRouter — falls back to local', async () => {
     vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
     vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
     vi.stubEnv('VITE_OPENROUTER_API_KEY', 'test-openrouter-key');
@@ -149,138 +113,143 @@ describe('Integration: Full fallback chain Gemini → Groq → OpenRouter → Lo
     fetchMock.mockImplementation(async (url: string) => {
       // Gemini fails
       if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
-        return { ok: false, status: 429, json: async () => ({}) };
+        return { ok: false, status: 500, json: async () => ({}) };
       }
       // Groq fails
       if (typeof url === 'string' && url.includes('api.groq.com')) {
-        return { ok: false, status: 429, json: async () => ({}) };
+        return { ok: false, status: 500, json: async () => ({}) };
       }
-      // OpenRouter succeeds with token usage
+      // OpenRouter should NOT be called
       if (typeof url === 'string' && url.includes('openrouter.ai')) {
+        throw new Error('OpenRouter should NOT be called by getAgentDrift');
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    const { getAgentDrift } = await import('../agentService');
+    const result = await getAgentDrift(snapshotA, snapshotB);
+
+    expect(result.source).toBe('local');
+    expect(result.fallbackReason).toBeDefined();
+    // Fallback reason mentions Gemini and Groq (not OpenRouter since it's removed)
+    expect(result.fallbackReason).toMatch(/Gemini/i);
+    expect(result.fallbackReason).toMatch(/Groq/i);
+    // No OpenRouter fetch calls
+    const openrouterCalls = fetchMock.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('openrouter.ai')
+    );
+    expect(openrouterCalls).toHaveLength(0);
+    // Deterministic briefings present
+    expect(result.drift.socBriefing.length).toBeGreaterThan(0);
+    expect(result.drift.cisoBriefing.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Validates: Requirements 3.2, 4.3
+   *
+   * Cost computation: Gemini source → GEMINI_COST_PER_TOKEN (0.00001).
+   * Groq source → GROQ_COST_PER_TOKEN (0.000001).
+   * Verified through telemetry output of getAgentDrift.
+   */
+  it('returns correct telemetry and cost for gemini and groq sources', async () => {
+    vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
+    vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
+
+    // Test Gemini cost
+    fetchMock.mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
         return {
           ok: true,
           json: async () => ({
-            choices: [{
-              message: {
-                content: JSON.stringify({ briefing: 'OpenRouter telemetry test briefing' }),
+            candidates: [{
+              content: {
+                parts: [{
+                  text: JSON.stringify({
+                    socBriefing: 'SOC from Gemini',
+                    cisoBriefing: 'CISO from Gemini',
+                    urgentDecision: 'Decide now',
+                  }),
+                }],
               },
             }],
-            usage: { total_tokens: 250 },
+            usageMetadata: { totalTokenCount: 1000 },
           }),
         };
       }
       return { ok: false, status: 404, json: async () => ({}) };
     });
 
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
-    expect(result.source).toBe('openrouter');
+    expect(result.source).toBe('gemini');
     expect(result.telemetry).toBeDefined();
+    expect(result.telemetry!.tokensConsumed).toBe(1000);
     expect(result.telemetry!.latencyMs).toBeGreaterThanOrEqual(0);
-    expect(typeof result.telemetry!.latencyMs).toBe('number');
-    expect(result.telemetry!.tokensConsumed).toBe(500); // 250 tokens × 2 parallel agents
-    expect(result.telemetry!.estimatedCost).toBe(0);
-    // fallbackReason should mention Gemini and Groq failed
-    expect(result.fallbackReason).toBeDefined();
-    expect(result.fallbackReason).toMatch(/Gemini/i);
-    expect(result.fallbackReason).toMatch(/Groq/i);
-  });
-
-  /**
-   * Validates: Requirements 4.3
-   *
-   * computeEstimatedCost returns 0.0000 for openrouter source for any token count.
-   * Tested indirectly through getAgentDrift telemetry output.
-   */
-  it('computeEstimatedCost returns 0 for openrouter source (any token count)', async () => {
-    vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
-    vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
-    vi.stubEnv('VITE_OPENROUTER_API_KEY', 'test-openrouter-key');
-
-    // Test with various token counts — cost should always be 0
-    const tokenCounts = [1, 100, 5000, 99999];
-
-    for (const tokens of tokenCounts) {
-      fetchMock.mockReset();
-      fetchMock.mockImplementation(async (url: string) => {
-        // Gemini and Groq fail
-        if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
-          return { ok: false, status: 500, json: async () => ({}) };
-        }
-        if (typeof url === 'string' && url.includes('api.groq.com')) {
-          return { ok: false, status: 500, json: async () => ({}) };
-        }
-        // OpenRouter succeeds with varying token counts
-        if (typeof url === 'string' && url.includes('openrouter.ai')) {
-          return {
-            ok: true,
-            json: async () => ({
-              choices: [{
-                message: {
-                  content: JSON.stringify({ briefing: `Briefing with ${tokens} tokens` }),
-                },
-              }],
-              usage: { total_tokens: tokens },
-            }),
-          };
-        }
-        return { ok: false, status: 404, json: async () => ({}) };
-      });
-
-      const result = await getAgentDrift(snapshotA, snapshotB);
-
-      expect(result.source).toBe('openrouter');
-      expect(result.telemetry).toBeDefined();
-      expect(result.telemetry!.estimatedCost).toBe(0);
-    }
-  });
-
-  /**
-   * Validates: Requirements 2.1, 2.2, 2.3, 2.4
-   *
-   * When all providers fail (Gemini HTTP error, Groq HTTP error, OpenRouter HTTP error),
-   * the system falls back to local deterministic engine.
-   */
-  it('all remote providers fail → source is local with full fallback', async () => {
-    vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
-    vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
-    vi.stubEnv('VITE_OPENROUTER_API_KEY', 'test-openrouter-key');
-
-    fetchMock.mockImplementation(async () => {
-      return { ok: false, status: 500, json: async () => ({}) };
-    });
-
-    const result = await getAgentDrift(snapshotA, snapshotB);
-
-    expect(result.source).toBe('local');
-    expect(result.fallbackReason).toBeDefined();
-    expect(result.fallbackReason).toMatch(/Gemini/i);
-    expect(result.fallbackReason).toMatch(/Groq/i);
-    expect(result.fallbackReason).toMatch(/OpenRouter/i);
-    // Local fallback has no telemetry
-    expect(result.telemetry).toBeUndefined();
-    // Deterministic briefings should still be present
-    expect(result.drift.socBriefing.length).toBeGreaterThan(0);
-    expect(result.drift.cisoBriefing.length).toBeGreaterThan(0);
+    // Gemini cost: 1000 * 0.00001 = 0.01
+    expect(result.telemetry!.estimatedCost).toBe(0.01);
   });
 
   /**
    * Validates: Requirements 2.6
    *
-   * When Gemini key is empty (skipped), Groq key is empty (skipped),
-   * and OpenRouter key is empty (skipped), the chain falls back to local
-   * without making any network requests.
+   * When all API keys are empty, no fetch calls are made and source is local.
+   * This confirms the single-pass architecture makes zero network calls when keys missing.
    */
   it('all keys empty → no fetch calls, source is local', async () => {
     vi.stubEnv('VITE_GEMINI_API_KEY', '');
     vi.stubEnv('VITE_GROQ_API_KEY', '');
     vi.stubEnv('VITE_OPENROUTER_API_KEY', '');
 
+    const { getAgentDrift } = await import('../agentService');
     const result = await getAgentDrift(snapshotA, snapshotB);
 
     expect(result.source).toBe('local');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.drift.socBriefing.length).toBeGreaterThan(0);
     expect(result.drift.cisoBriefing.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Validates: Requirements 1.8, 2.1
+   *
+   * getAgentDrift makes a SINGLE fetch call (not parallel) when Gemini succeeds.
+   * This validates the single-pass architecture vs the old dual-parallel approach.
+   */
+  it('makes a single fetch call when first provider succeeds', async () => {
+    vi.stubEnv('VITE_GEMINI_API_KEY', 'test-gemini-key');
+    vi.stubEnv('VITE_GROQ_API_KEY', 'test-groq-key');
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (typeof url === 'string' && url.includes('generativelanguage.googleapis.com')) {
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [{
+              content: {
+                parts: [{
+                  text: JSON.stringify({
+                    socBriefing: 'SOC briefing single pass',
+                    cisoBriefing: 'CISO briefing single pass',
+                    urgentDecision: 'Act immediately',
+                  }),
+                }],
+              },
+            }],
+            usageMetadata: { totalTokenCount: 500 },
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    const { getAgentDrift } = await import('../agentService');
+    const result = await getAgentDrift(snapshotA, snapshotB);
+
+    expect(result.source).toBe('gemini');
+    // Only ONE fetch call was made (single-pass, not parallel SOC + CISO)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.drift.socBriefing).toBe('SOC briefing single pass');
+    expect(result.drift.cisoBriefing).toBe('CISO briefing single pass');
   });
 });
