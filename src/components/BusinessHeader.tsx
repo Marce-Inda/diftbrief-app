@@ -1,5 +1,8 @@
+import { useState, useRef, useCallback } from 'react';
 import type { ReactElement } from 'react';
 import type { SeverityLevel, Regulation } from '../types/index';
+import { FinancialRiskModal } from './FinancialRiskModal';
+import { RegulatorySlaModal } from './RegulatorySlaModal';
 import './BusinessHeader.css';
 
 /**
@@ -75,7 +78,9 @@ function getApplicableRegulations(regulations: Regulation[]): Regulation[] {
 
 /**
  * Banner de métricas de impacto de negocio para el dashboard de DriftBrief.
- * Componente puramente presentacional sin estado interno ni efectos secundarios.
+ * Muestra métricas en vivo de drift incluyendo triage, riesgo financiero y SLAs regulatorios.
+ * El card de riesgo financiero es interactivo cuando hay datos disponibles, abriendo un modal
+ * con el desglose detallado de costos.
  * @param props - Datos de métricas tipados según BusinessHeaderProps
  * @returns Elemento JSX del banner con tres secciones de métricas
  */
@@ -86,6 +91,47 @@ export function BusinessHeader({
   financialExposureUsd,
   regulations,
 }: BusinessHeaderProps): ReactElement {
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
+  const financialCardRef = useRef<HTMLDivElement>(null);
+
+  const isInteractive = financialExposureUsd != null;
+
+  /**
+   * Cierra el modal financiero y devuelve el foco al card financiero.
+   */
+  const handleClose = useCallback((): void => {
+    setIsModalOpen(false);
+    financialCardRef.current?.focus();
+  }, []);
+
+  /**
+   * Cierra el modal de regulación y limpia la selección.
+   */
+  const handleRegulationModalClose = useCallback((): void => {
+    setSelectedRegulation(null);
+  }, []);
+
+  /**
+   * Abre el modal al hacer clic en el card financiero.
+   */
+  const handleCardClick = (): void => {
+    if (isInteractive) {
+      setIsModalOpen(true);
+    }
+  };
+
+  /**
+   * Abre el modal al presionar Enter o Space en el card financiero.
+   */
+  const handleCardKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!isInteractive) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setIsModalOpen(true);
+    }
+  };
+
   const triageTimeBadge =
     automatedTimeSeconds == null ||
     automatedTimeSeconds <= 0 ||
@@ -107,13 +153,33 @@ export function BusinessHeader({
       <span className="business-header__label">SLA REGULATORIO</span>
       <div className="business-header__badges">
         {applicable.map((reg) => (
-          <span key={reg.id} className="business-header__badge">
+          <span
+            key={reg.id}
+            className="business-header__badge business-header__badge--interactive"
+            role="button"
+            tabIndex={0}
+            aria-label={`Ver detalle regulatorio: ${reg.name}`}
+            onClick={() => setSelectedRegulation(reg)}
+            onKeyDown={(e: React.KeyboardEvent<HTMLSpanElement>) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setSelectedRegulation(reg);
+              }
+            }}
+          >
             ⚠️ {reg.name} • SLA de {reg.notificationDeadlineHours}h
           </span>
         ))}
       </div>
     </div>
   ) : null;
+
+  const financialCardClassName = [
+    'business-header__metric',
+    'business-header__financial',
+    severityToClassName(severity),
+    isInteractive ? 'business-header__financial--interactive' : '',
+  ].filter(Boolean).join(' ');
 
   return (
     <section className="business-header" role="banner">
@@ -124,8 +190,13 @@ export function BusinessHeader({
       {triageTimeBadge}
       {/* Financial Risk Indicator */}
       <div
-        className={`business-header__metric business-header__financial${severityToClassName(severity) ? ` ${severityToClassName(severity)}` : ''}`}
-        {...((severity === 'critical' || severity === 'high') ? { 'aria-label': `Riesgo financiero: severidad ${severity}` } : {})}
+        ref={financialCardRef}
+        className={financialCardClassName}
+        onClick={handleCardClick}
+        onKeyDown={handleCardKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-label={`Riesgo financiero: severidad ${severity}`}
       >
         <span className="business-header__label">RIESGO FINANCIERO</span>
         <span className="business-header__value">
@@ -133,6 +204,19 @@ export function BusinessHeader({
         </span>
       </div>
       {regulatorySLABadge}
+      {isModalOpen && financialExposureUsd != null && (
+        <FinancialRiskModal
+          severity={severity}
+          financialExposureUsd={financialExposureUsd}
+          onClose={handleClose}
+        />
+      )}
+      {selectedRegulation !== null && (
+        <RegulatorySlaModal
+          regulation={selectedRegulation}
+          onClose={handleRegulationModalClose}
+        />
+      )}
     </section>
   );
 }

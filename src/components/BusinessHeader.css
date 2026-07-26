@@ -133,3 +133,46 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* Interactive Financial Card - Clickable State */
+.business-header__financial--interactive {
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.business-header__financial--interactive:hover {
+  box-shadow: 0 0 20px rgba(91, 192, 235, 0.25);
+  transform: translateY(-1px);
+}
+
+.business-header__financial--interactive.financial-risk--critical:hover {
+  box-shadow: 0 0 20px rgba(248, 81, 73, 0.3);
+}
+
+.business-header__financial--interactive.financial-risk--high:hover {
+  box-shadow: 0 0 16px rgba(245, 165, 36, 0.25);
+}
+
+.business-header__financial--interactive:focus-visible {
+  outline: 2px solid var(--color-drift);
+  outline-offset: 2px;
+}
+
+
+
+/* Interactive Regulation Badge - Clickable State */
+.business-header__badge--interactive {
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.business-header__badge--interactive:hover {
+  box-shadow: 0 0 12px rgba(255, 209, 102, 0.3);
+  transform: translateY(-1px);
+  border-color: rgba(255, 209, 102, 0.6);
+}
+
+.business-header__badge--interactive:focus-visible {
+  outline: 2px solid #FFD166;
+  outline-offset: 2px;
+}

@@ -1,0 +1,256 @@
+/* src/components/FinancialRiskModal.css */
+
+/* === Overlay === */
+.financial-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg);
+  background: rgba(15, 19, 24, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: financialModalFadeIn 200ms ease forwards;
+}
+
+/* === Modal Surface === */
+.financial-modal {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(248, 81, 73, 0.08);
+  animation: financialModalScaleUp 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* === Close Button === */
+.financial-modal__close {
+  position: sticky;
+  top: 0;
+  float: right;
+  margin: var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  z-index: 1;
+}
+
+.financial-modal__close:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-drift);
+}
+
+.financial-modal__close:focus-visible {
+  outline: 2px solid var(--color-drift);
+  outline-offset: 2px;
+}
+
+/* === Header === */
+.financial-modal__header {
+  padding: var(--spacing-xl);
+  padding-top: var(--spacing-lg);
+  padding-bottom: var(--spacing-md);
+}
+
+.financial-modal__title {
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-sm) 0;
+  line-height: 1.3;
+}
+
+/* === Total Exposure === */
+.financial-modal__total {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  margin: var(--spacing-md) 0;
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+/* === Severity Badge === */
+.financial-modal__severity {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.financial-modal__severity--critical {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--color-critical);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  box-shadow: 0 0 12px rgba(248, 81, 73, 0.2);
+}
+
+.financial-modal__severity--high {
+  background: rgba(245, 165, 36, 0.12);
+  color: var(--color-probable);
+  border: 1px solid rgba(245, 165, 36, 0.3);
+  box-shadow: 0 0 10px rgba(245, 165, 36, 0.15);
+}
+
+.financial-modal__severity--medium {
+  background: rgba(245, 165, 36, 0.08);
+  color: var(--color-probable);
+  border: 1px solid rgba(245, 165, 36, 0.2);
+}
+
+.financial-modal__severity--low {
+  background: rgba(168, 179, 191, 0.08);
+  color: var(--color-text-secondary);
+  border: 1px solid rgba(168, 179, 191, 0.2);
+}
+
+/* === Breakdown Section === */
+.financial-modal__breakdown {
+  padding: 0 var(--spacing-xl) var(--spacing-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+/* === Breakdown Row === */
+.financial-modal__breakdown-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast);
+}
+
+.financial-modal__breakdown-row:hover {
+  border-color: var(--color-drift);
+}
+
+/* === Category Icon === */
+.financial-modal__category-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-base);
+}
+
+/* === Category Label === */
+.financial-modal__category-label {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+/* === Percentage Badge === */
+.financial-modal__percentage {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  background: rgba(91, 192, 235, 0.1);
+  color: var(--color-drift);
+  border: 1px solid rgba(91, 192, 235, 0.25);
+  letter-spacing: 0.03em;
+}
+
+/* === Amount === */
+.financial-modal__amount {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--color-text-primary);
+  min-width: 80px;
+  text-align: right;
+}
+
+/* === Animations === */
+@keyframes financialModalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes financialModalScaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* === Responsive === */
+@media (max-width: 768px) {
+  .financial-modal-overlay {
+    padding: var(--spacing-sm);
+    align-items: flex-start;
+  }
+
+  .financial-modal {
+    max-height: 95vh;
+    max-width: 100%;
+    border-radius: var(--radius-lg);
+  }
+
+  .financial-modal__header {
+    padding: var(--spacing-lg);
+    padding-bottom: var(--spacing-sm);
+  }
+
+  .financial-modal__title {
+    font-size: var(--font-size-xl);
+  }
+
+  .financial-modal__total {
+    font-size: 1.5rem;
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .financial-modal__breakdown {
+    padding: 0 var(--spacing-lg) var(--spacing-lg);
+  }
+
+  .financial-modal__breakdown-row {
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+  }
+
+  .financial-modal__category-label {
+    flex-basis: calc(100% - 44px);
+  }
+
+  .financial-modal__amount {
+    margin-left: auto;
+  }
+}
