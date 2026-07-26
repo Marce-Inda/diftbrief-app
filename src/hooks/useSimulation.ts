@@ -44,154 +44,175 @@ export type SimulationAction =
 const COMPLETED_BADGE_DURATION_MS = 5000;
 
 /**
- * Secuencia completa del tour guiado (~43 segundos).
- * Cada paso se ejecuta en el momento indicado por startMs.
- * Duración por paso: ~6s (pasos 1-5, 7) y ~7s (paso 6 con animación CISO).
+ * Secuencia completa del tour guiado (~40 segundos).
+ * Narrativa: "Panorama General ➔ Profundización Interactiva"
+ *
+ * FASE 1 (0s-12s): Recorrido panorámico visual con auto-scrolls temporizados
+ * para que el usuario conozca la estructura completa del dashboard.
+ *
+ * FASE 2 (12s-40s): Retorno al inicio y profundización interactiva con
+ * apertura secuencial de modales, cambio de vistas y acciones ejecutivas.
  */
 const TOUR_STEPS: TourStep[] = [
-  // ── Paso 1 (0s-6s): Transición A-B, Vista SOC, abrir TriageEfficiencyModal ──
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FASE 1: PANORAMA GENERAL (0s - 12s)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Paso 1 (0s - 4s): Inicio en top, Vista SOC, transición A-B ──
   {
-    id: 'step-1-init',
-    description: 'Iniciar en A-B, Vista SOC',
+    id: 'phase1-step1-init',
+    description: 'Iniciar en A-B, Vista SOC, scroll a top',
     startMs: 0,
     action: { type: 'SET_TRANSITION', transition: 'A-B' },
   },
   {
-    id: 'step-1-role',
+    id: 'phase1-step1-role',
     description: 'Establecer Vista SOC',
     startMs: 100,
     action: { type: 'SET_ROLE', role: 'soc' },
   },
   {
-    id: 'step-1-scroll-top',
-    description: 'Scroll al inicio para ver métricas',
+    id: 'phase1-step1-scroll',
+    description: 'Scroll a top para observar encabezado',
     startMs: 200,
     action: { type: 'SCROLL_TO', target: 'top' },
   },
+
+  // ── Paso 2 (4s - 8s): Auto-scroll a zona de deltas/timeline ──
   {
-    id: 'step-1-open-triage',
-    description: 'Abrir modal de eficiencia de triage',
-    startMs: 500,
-    action: { type: 'OPEN_TRIAGE_MODAL' },
+    id: 'phase1-step2-scroll-deltas',
+    description: 'Scroll suave a deltas para observar timeline',
+    startMs: 4000,
+    action: { type: 'SCROLL_TO', target: 'deltas' },
   },
 
-  // ── Paso 2 (6s-12s): Cerrar modal, scroll a Deltas, abrir SnapshotDetailModal ──
+  // ── Paso 3 (8s - 12s): Auto-scroll a zona inferior (briefing/decision) ──
   {
-    id: 'step-2-close-triage',
+    id: 'phase1-step3-scroll-briefing',
+    description: 'Scroll suave a briefing/decision para ver parte inferior',
+    startMs: 8000,
+    action: { type: 'SCROLL_TO', target: 'briefing' },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FASE 2: PROFUNDIZACIÓN INTERACTIVA (12s - 40s)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Paso 4 (12s - 15s): Retorno a top, inicio de interactividad ──
+  {
+    id: 'phase2-step4-scroll-top',
+    description: 'Retorno suave a top para iniciar interactividad',
+    startMs: 12000,
+    action: { type: 'SCROLL_TO', target: 'top' },
+  },
+
+  // ── Paso 5 (15s - 20s): Abrir TriageModal, cerrar, scroll a deltas, abrir SnapshotDetail ──
+  {
+    id: 'phase2-step5-open-triage',
+    description: 'Abrir modal de eficiencia de triage',
+    startMs: 15000,
+    action: { type: 'OPEN_TRIAGE_MODAL' },
+  },
+  {
+    id: 'phase2-step5-close-triage',
     description: 'Cerrar modal de triage',
-    startMs: 6000,
+    startMs: 17000,
     action: { type: 'CLOSE_TRIAGE_MODAL' },
   },
   {
-    id: 'step-2-scroll-deltas',
-    description: 'Scroll a zona de deltas',
-    startMs: 6500,
+    id: 'phase2-step5-scroll-deltas',
+    description: 'Scroll a deltas para abrir detalle forense',
+    startMs: 17500,
     action: { type: 'SCROLL_TO', target: 'deltas' },
   },
   {
-    id: 'step-2-open-snapshot',
+    id: 'phase2-step5-open-snapshot',
     description: 'Abrir detalle forense de Snapshot B',
-    startMs: 7000,
+    startMs: 18500,
     action: { type: 'OPEN_SNAPSHOT_DETAIL', snapshotId: 'B' },
   },
-
-  // ── Paso 3 (12s-18s): Cerrar modal forense, scroll a briefing, copiar SOC ──
   {
-    id: 'step-3-close-snapshot',
+    id: 'phase2-step5-close-snapshot',
     description: 'Cerrar modal de detalle forense',
-    startMs: 12000,
+    startMs: 20000,
     action: { type: 'CLOSE_SNAPSHOT_DETAIL' },
   },
-  {
-    id: 'step-3-scroll-briefing',
-    description: 'Scroll al panel de briefing',
-    startMs: 12500,
-    action: { type: 'SCROLL_TO', target: 'briefing' },
-  },
-  {
-    id: 'step-3-copy-soc',
-    description: 'Disparar copia de briefing SOC',
-    startMs: 13500,
-    action: { type: 'TRIGGER_COPY_BRIEFING' },
-  },
 
-  // ── Paso 4 (18s-24s): Cambiar a B-C + CISO, abrir FinancialRiskModal ──
+  // ── Paso 6 (20s - 26s): Cambiar a B-C + CISO, scroll top, abrir modales financieros ──
   {
-    id: 'step-4-transition',
+    id: 'phase2-step6-transition',
     description: 'Cambiar a transición B-C',
-    startMs: 18000,
+    startMs: 20500,
     action: { type: 'SET_TRANSITION', transition: 'B-C' },
   },
   {
-    id: 'step-4-role-ciso',
+    id: 'phase2-step6-role-ciso',
     description: 'Cambiar a Vista CISO',
-    startMs: 18200,
+    startMs: 20700,
     action: { type: 'SET_ROLE', role: 'ciso' },
   },
   {
-    id: 'step-4-scroll-top',
-    description: 'Scroll al inicio para ver métricas actualizadas',
-    startMs: 18500,
+    id: 'phase2-step6-scroll-top',
+    description: 'Scroll a top para vista CISO',
+    startMs: 21000,
     action: { type: 'SCROLL_TO', target: 'top' },
   },
   {
-    id: 'step-4-open-financial',
+    id: 'phase2-step6-open-financial',
     description: 'Abrir modal de riesgo financiero',
-    startMs: 19000,
+    startMs: 22000,
     action: { type: 'OPEN_FINANCIAL_MODAL' },
   },
-
-  // ── Paso 5 (24s-30s): Cerrar FinancialRisk, abrir RegulatorySlaModal ──
   {
-    id: 'step-5-close-financial',
+    id: 'phase2-step6-close-financial',
     description: 'Cerrar modal de riesgo financiero',
     startMs: 24000,
     action: { type: 'CLOSE_FINANCIAL_MODAL' },
   },
   {
-    id: 'step-5-open-regulatory',
+    id: 'phase2-step6-open-regulatory',
     description: 'Abrir modal de SLA regulatorio (GDPR)',
     startMs: 24500,
     action: { type: 'OPEN_REGULATORY_MODAL', regulationId: 'gdpr' },
   },
   {
-    id: 'step-5-close-regulatory',
+    id: 'phase2-step6-close-regulatory',
     description: 'Cerrar modal regulatorio',
-    startMs: 30000,
+    startMs: 26000,
     action: { type: 'CLOSE_REGULATORY_MODAL' },
   },
 
-  // ── Paso 6 (30s-37s): Scroll a decisión, simular aprobación ejecutiva (7s) ──
+  // ── Paso 7 (26s - 34s): Scroll a decision, simular aprobación ejecutiva ──
   {
-    id: 'step-6-scroll-decision',
+    id: 'phase2-step7-scroll-decision',
     description: 'Scroll a la decisión urgente CISO',
-    startMs: 30500,
+    startMs: 26500,
     action: { type: 'SCROLL_TO', target: 'decision' },
   },
   {
-    id: 'step-6-approve',
+    id: 'phase2-step7-approve',
     description: 'Simular aprobación ejecutiva de aislamiento',
-    startMs: 32000,
+    startMs: 28000,
     action: { type: 'TRIGGER_DECISION_APPROVAL', actionId: 'approve-isolation' },
   },
 
-  // ── Paso 7 (37s-43s): Copiar briefing CISO y completar ──
+  // ── Paso 8 (34s - 40s): Scroll a briefing, copiar briefing CISO y completar ──
   {
-    id: 'step-7-scroll-briefing',
+    id: 'phase2-step8-scroll-briefing',
     description: 'Scroll al panel de briefing CISO',
-    startMs: 37000,
+    startMs: 34000,
     action: { type: 'SCROLL_TO', target: 'briefing' },
   },
   {
-    id: 'step-7-copy-ciso',
+    id: 'phase2-step8-copy-ciso',
     description: 'Disparar copia de briefing CISO',
-    startMs: 38000,
+    startMs: 36000,
     action: { type: 'TRIGGER_COPY_BRIEFING' },
   },
   {
-    id: 'step-7-complete',
+    id: 'phase2-step8-complete',
     description: 'Finalizar simulación',
-    startMs: 43000,
+    startMs: 40000,
     action: { type: 'COMPLETE' },
   },
 ];
