@@ -1,10 +1,9 @@
 /**
  * @fileoverview Componente SnapshotSelector para cambiar entre transiciones.
- * Incluye botón de simulación automática de evolución del incidente.
+ * Incluye botón de simulación del tour guiado completo del producto.
  */
 
-import type { TransitionId, UserRole } from '../types';
-import { useSimulation } from '../hooks/useSimulation';
+import type { TransitionId } from '../types';
 import type { SimulationStatus } from '../hooks/useSimulation';
 
 interface SnapshotSelectorProps {
@@ -12,8 +11,16 @@ interface SnapshotSelectorProps {
   activeTransition: TransitionId;
   /** Callback cuando el usuario cambia de transición */
   onTransitionChange: (transition: TransitionId) => void;
-  /** Callback opcional para cambiar el rol durante la simulación (SOC → CISO) */
-  onRoleChange?: (role: UserRole) => void;
+  /** Estado de la simulación (controlado desde App) */
+  simulationStatus: SimulationStatus;
+  /** Callback para iniciar/pausar la simulación */
+  onSimulationToggle: () => void;
+  /** Callback para cancelar la simulación */
+  onSimulationCancel: () => void;
+  /** Índice del paso actual del tour */
+  currentStepIndex?: number;
+  /** Total de pasos del tour */
+  totalSteps?: number;
 }
 
 /**
@@ -24,40 +31,46 @@ interface SnapshotSelectorProps {
 function getButtonLabel(status: SimulationStatus): string {
   switch (status) {
     case 'running':
-      return '⏸ Pausar Simulación';
+      return '⏸ Pausar Tour';
     case 'completed':
       return '✓ Simulación Completada';
     default:
-      return '▶ Simular Evolución';
+      return '▶ Tour Guiado';
   }
 }
 
 /**
  * Control para alternar entre las transiciones de snapshots (A→B, B→C).
- * Incluye un botón de simulación que reproduce automáticamente la evolución
- * del incidente alternando entre transiciones cada 7 segundos.
- * Durante A→B muestra la vista SOC; al avanzar a B→C cambia a vista CISO.
+ * Incluye un botón que inicia el tour guiado automatizado del producto (~25s).
+ * La simulación se puede pausar/reanudar o se cancela automáticamente
+ * si el usuario interactúa manualmente con la interfaz.
  *
  * @param props - Props del componente
  * @returns Elemento JSX del selector de snapshots
  */
-export function SnapshotSelector({ activeTransition, onTransitionChange, onRoleChange }: SnapshotSelectorProps) {
-  const { status, toggle, cancel } = useSimulation({
-    activeTransition,
-    onTransitionChange,
-    onRoleChange,
-  });
-
+export function SnapshotSelector({
+  activeTransition,
+  onTransitionChange,
+  simulationStatus,
+  onSimulationToggle,
+  onSimulationCancel,
+  currentStepIndex = 0,
+  totalSteps = 1,
+}: SnapshotSelectorProps) {
   /**
    * Maneja el cambio manual de transición.
    * Si la simulación está en curso, la cancela antes de aplicar el cambio.
    */
   const handleManualTransitionChange = (transition: TransitionId): void => {
-    if (status === 'running') {
-      cancel();
+    if (simulationStatus === 'running') {
+      onSimulationCancel();
     }
     onTransitionChange(transition);
   };
+
+  const progressPercentage = totalSteps > 0
+    ? Math.round(((currentStepIndex + 1) / totalSteps) * 100)
+    : 0;
 
   return (
     <div className="snapshot-selector">
@@ -84,15 +97,16 @@ export function SnapshotSelector({ activeTransition, onTransitionChange, onRoleC
       </div>
 
       <button
-        className={`simulation-btn simulation-btn--${status}`}
-        onClick={toggle}
-        aria-label={getButtonLabel(status)}
-        disabled={status === 'completed'}
+        className={`simulation-btn simulation-btn--${simulationStatus}`}
+        onClick={onSimulationToggle}
+        aria-label={getButtonLabel(simulationStatus)}
+        disabled={simulationStatus === 'completed'}
+        data-simulation-control="true"
       >
-        <span className="simulation-btn__label">{getButtonLabel(status)}</span>
-        {status === 'running' && (
+        <span className="simulation-btn__label">{getButtonLabel(simulationStatus)}</span>
+        {simulationStatus === 'running' && (
           <span className="simulation-btn__badge" aria-live="polite">
-            🔴 SIMULACIÓN EN VIVO
+            🔴 TOUR EN VIVO — {progressPercentage}%
           </span>
         )}
       </button>

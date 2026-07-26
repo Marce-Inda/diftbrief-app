@@ -1,12 +1,15 @@
 /**
  * @fileoverview Componente principal de DriftBrief.
  * Integra todos los componentes y gestiona el estado de la aplicación.
+ * Coordina la simulación de tour guiado a través del hook useSimulation.
  */
 
-import { useState, useMemo, lazy, Suspense } from 'react';
+import { useState, useMemo, useCallback, lazy, Suspense } from 'react';
 import type { TransitionId, UserRole, Snapshot, TelemetryData, SeverityLevel, TimelineNode } from './types';
 import { useAgentDrift } from './hooks/useAgentDrift';
 import { useTelemetryToggle } from './hooks/useTelemetryToggle';
+import { useSimulation } from './hooks/useSimulation';
+import type { SimulationAction } from './hooks/useSimulation';
 import { Header } from './components/Header';
 import { BusinessHeader } from './components/BusinessHeader';
 import { SECURITY_KNOWLEDGE_BASE } from './services/knowledgeBase';
@@ -51,6 +54,85 @@ function App() {
   const [activeTransition, setActiveTransition] = useState<TransitionId>('A-B');
   const [activeRole, setActiveRole] = useState<UserRole>('soc');
   const [selectedSnapshotForModal, setSelectedSnapshotForModal] = useState<Snapshot | null>(null);
+
+  // ─── Simulation-controlled modal states ─────────────────────────────────────
+  const [simTriageModalOpen, setSimTriageModalOpen] = useState<boolean>(false);
+  const [simFinancialModalOpen, setSimFinancialModalOpen] = useState<boolean>(false);
+  const [simRegulatoryId, setSimRegulatoryId] = useState<string | null>(null);
+  const [simCopyTrigger, setSimCopyTrigger] = useState<number>(0);
+  const [simDecisionTrigger, setSimDecisionTrigger] = useState<string | null>(null);
+
+  /**
+   * Handles simulation actions dispatched by the tour sequence.
+   * Opens/closes modals and triggers UI interactions programmatically.
+   */
+  const handleSimulationAction = useCallback((action: SimulationAction) => {
+    switch (action.type) {
+      case 'OPEN_TRIAGE_MODAL':
+        setSimTriageModalOpen(true);
+        break;
+      case 'CLOSE_TRIAGE_MODAL':
+        setSimTriageModalOpen(false);
+        break;
+      case 'OPEN_SNAPSHOT_DETAIL': {
+        const snap = snapshots.find(s => s.id === action.snapshotId) ?? null;
+        setSelectedSnapshotForModal(snap);
+        break;
+      }
+      case 'CLOSE_SNAPSHOT_DETAIL':
+        setSelectedSnapshotForModal(null);
+        break;
+      case 'OPEN_FINANCIAL_MODAL':
+        setSimFinancialModalOpen(true);
+        break;
+      case 'CLOSE_FINANCIAL_MODAL':
+        setSimFinancialModalOpen(false);
+        break;
+      case 'OPEN_REGULATORY_MODAL':
+        setSimRegulatoryId(action.regulationId);
+        break;
+      case 'CLOSE_REGULATORY_MODAL':
+        setSimRegulatoryId(null);
+        break;
+      case 'TRIGGER_COPY_BRIEFING':
+        setSimCopyTrigger(prev => prev + 1);
+        break;
+      case 'TRIGGER_DECISION_APPROVAL':
+        setSimDecisionTrigger(action.actionId);
+        break;
+      default:
+        break;
+    }
+  }, []);
+
+  // ─── Simulation hook (guided product tour) ──────────────────────────────────
+  const {
+    status: simulationStatus,
+    currentStepIndex,
+    totalSteps,
+    toggle: toggleSimulation,
+    cancel: cancelSimulation,
+  } = useSimulation({
+    activeTransition,
+    onTransitionChange: setActiveTransition,
+    onRoleChange: setActiveRole,
+    onAction: handleSimulationAction,
+  });
+
+  /**
+   * Cancels the simulation when the user manually interacts with elements
+   * outside the simulation controls. Checks if the click target is within
+   * a simulation-control element to avoid self-cancellation.
+   */
+  const handleUserInteraction = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (simulationStatus !== 'running') return;
+
+    // Don't cancel if clicking within simulation controls
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-simulation-control]')) return;
+
+    cancelSimulation();
+  }, [simulationStatus, cancelSimulation]);
 
   const { fromSnapshot, toSnapshot } = useMemo(() => {
     const [fromId, toId] = activeTransition.split('-');
@@ -122,7 +204,7 @@ function App() {
   }, [drift.recommendedActions, activeRole]);
 
   return (
-    <div className="app">
+    <div className="app" onClickCapture={simulationStatus === 'running' ? handleUserInteraction : undefined}>
       <Header />
 
       <BusinessHeader
@@ -131,6 +213,12 @@ function App() {
         severity={toSnapshot.severity}
         financialExposureUsd={severityToFinancialRisk(toSnapshot.severity)}
         regulations={SECURITY_KNOWLEDGE_BASE.regulations}
+        simTriageModalOpen={simTriageModalOpen}
+        simFinancialModalOpen={simFinancialModalOpen}
+        simRegulatoryId={simRegulatoryId}
+        onSimTriageModalClose={() => setSimTriageModalOpen(false)}
+        onSimFinancialModalClose={() => setSimFinancialModalOpen(false)}
+        onSimRegulatoryModalClose={() => setSimRegulatoryId(null)}
       />
 
       <main className="app__main">
@@ -147,7 +235,11 @@ function App() {
           <SnapshotSelector
             activeTransition={activeTransition}
             onTransitionChange={setActiveTransition}
-            onRoleChange={setActiveRole}
+            simulationStatus={simulationStatus}
+            onSimulationToggle={toggleSimulation}
+            onSimulationCancel={cancelSimulation}
+            currentStepIndex={currentStepIndex}
+            totalSteps={totalSteps}
           />
           <RoleSwitcher
             activeRole={activeRole}
@@ -193,7 +285,12 @@ function App() {
         </section>
 
         <div key={`decision-${activeTransition}`} className="drift-animate-in">
-          <DecisionCard decision={drift.urgentDecision} activeRole={activeRole} />
+          <DecisionCard
+            decision={drift.urgentDecision}
+            activeRole={activeRole}
+            simDecisionTrigger={simDecisionTrigger}
+            onSimDecisionHandled={() => setSimDecisionTrigger(null)}
+          />
         </div>
 
         <section className="app__actions">
@@ -214,6 +311,7 @@ function App() {
             socBriefing={drift.socBriefing}
             cisoBriefing={drift.cisoBriefing}
             activeRole={activeRole}
+            simCopyTrigger={simCopyTrigger}
           />
         </Suspense>
       </main>

@@ -21,6 +21,18 @@ export interface BusinessHeaderProps {
   financialExposureUsd: number | null | undefined;
   /** Lista de regulaciones aplicables al incidente */
   regulations: Regulation[];
+  /** Control externo: abrir modal de triage desde simulación */
+  simTriageModalOpen?: boolean;
+  /** Control externo: abrir modal financiero desde simulación */
+  simFinancialModalOpen?: boolean;
+  /** Control externo: ID de regulación para abrir modal desde simulación */
+  simRegulatoryId?: string | null;
+  /** Callback cuando el modal de triage controlado por simulación se cierra */
+  onSimTriageModalClose?: () => void;
+  /** Callback cuando el modal financiero controlado por simulación se cierra */
+  onSimFinancialModalClose?: () => void;
+  /** Callback cuando el modal regulatorio controlado por simulación se cierra */
+  onSimRegulatoryModalClose?: () => void;
 }
 
 /**
@@ -91,6 +103,12 @@ export function BusinessHeader({
   severity,
   financialExposureUsd,
   regulations,
+  simTriageModalOpen = false,
+  simFinancialModalOpen = false,
+  simRegulatoryId = null,
+  onSimTriageModalClose,
+  onSimFinancialModalClose,
+  onSimRegulatoryModalClose,
 }: BusinessHeaderProps): ReactElement {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
@@ -105,28 +123,37 @@ export function BusinessHeader({
     manualTimeSeconds != null &&
     manualTimeSeconds > 0;
 
+  // Derive effective modal states (internal OR simulation-controlled)
+  const effectiveTriageOpen = isTriageModalOpen || simTriageModalOpen;
+  const effectiveFinancialOpen = isModalOpen || simFinancialModalOpen;
+  const effectiveRegulation = selectedRegulation ??
+    (simRegulatoryId ? regulations.find(r => r.id === simRegulatoryId) ?? null : null);
+
   /**
    * Cierra el modal financiero y devuelve el foco al card financiero.
    */
   const handleClose = useCallback((): void => {
     setIsModalOpen(false);
+    onSimFinancialModalClose?.();
     financialCardRef.current?.focus();
-  }, []);
+  }, [onSimFinancialModalClose]);
 
   /**
    * Cierra el modal de regulación y limpia la selección.
    */
   const handleRegulationModalClose = useCallback((): void => {
     setSelectedRegulation(null);
-  }, []);
+    onSimRegulatoryModalClose?.();
+  }, [onSimRegulatoryModalClose]);
 
   /**
    * Cierra el modal de triage y devuelve el foco al card de triage.
    */
   const handleTriageModalClose = useCallback((): void => {
     setIsTriageModalOpen(false);
+    onSimTriageModalClose?.();
     triageCardRef.current?.focus();
-  }, []);
+  }, [onSimTriageModalClose]);
 
   /**
    * Abre el modal al hacer clic en el card financiero.
@@ -233,20 +260,20 @@ export function BusinessHeader({
         </span>
       </div>
       {regulatorySLABadge}
-      {isModalOpen && financialExposureUsd != null && (
+      {effectiveFinancialOpen && financialExposureUsd != null && (
         <FinancialRiskModal
           severity={severity}
           financialExposureUsd={financialExposureUsd}
           onClose={handleClose}
         />
       )}
-      {selectedRegulation !== null && (
+      {effectiveRegulation !== null && (
         <RegulatorySlaModal
-          regulation={selectedRegulation}
+          regulation={effectiveRegulation}
           onClose={handleRegulationModalClose}
         />
       )}
-      {isTriageModalOpen && isTriageInteractive && (
+      {effectiveTriageOpen && isTriageInteractive && (
         <TriageEfficiencyModal
           automatedTimeSeconds={automatedTimeSeconds as number}
           manualTimeSeconds={manualTimeSeconds as number}

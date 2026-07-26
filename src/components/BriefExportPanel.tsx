@@ -1,8 +1,9 @@
 /**
  * @fileoverview Componente BriefExportPanel para copiar el briefing al portapapeles.
+ * Soporta trigger externo de copia desde la simulación de tour guiado.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { UserRole } from '../types';
 
 interface BriefExportPanelProps {
@@ -12,15 +13,20 @@ interface BriefExportPanelProps {
   cisoBriefing: string;
   /** Rol activo actualmente */
   activeRole: UserRole;
+  /** Trigger externo: incrementar para disparar copia desde simulación */
+  simCopyTrigger?: number;
 }
 
 /**
  * Panel de exportación que permite copiar el briefing al portapapeles.
+ * Acepta un trigger externo (simCopyTrigger) para disparar la copia
+ * programáticamente durante la simulación de tour guiado.
  * @param props - Props del componente
  * @returns Elemento JSX del panel de exportación
  */
-export function BriefExportPanel({ socBriefing, cisoBriefing, activeRole }: BriefExportPanelProps) {
+export function BriefExportPanel({ socBriefing, cisoBriefing, activeRole, simCopyTrigger = 0 }: BriefExportPanelProps) {
   const [copied, setCopied] = useState(false);
+  const prevTriggerRef = useRef<number>(simCopyTrigger);
 
   const briefingText = activeRole === 'soc' ? socBriefing : cisoBriefing;
 
@@ -33,6 +39,14 @@ export function BriefExportPanel({ socBriefing, cisoBriefing, activeRole }: Brie
       setTimeout(() => setCopied(false), 2000);
     });
   };
+
+  // React to external simulation trigger
+  useEffect(() => {
+    if (simCopyTrigger > 0 && simCopyTrigger !== prevTriggerRef.current) {
+      prevTriggerRef.current = simCopyTrigger;
+      handleCopy();
+    }
+  });
 
   return (
     <div className="brief-export" id="briefing-panel" role="tabpanel">

@@ -3,7 +3,7 @@
  * En vista CISO, incluye un panel interactivo de acciones ejecutivas.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { UrgentDecision, UserRole } from '../types';
 
 /** Estado de una acción ejecutiva del CISO */
@@ -25,6 +25,10 @@ interface DecisionCardProps {
   decision: UrgentDecision;
   /** Rol activo del usuario */
   activeRole: UserRole;
+  /** Trigger externo: ID de acción a ejecutar desde simulación */
+  simDecisionTrigger?: string | null;
+  /** Callback cuando la simulación ha ejecutado la acción */
+  onSimDecisionHandled?: () => void;
 }
 
 /**
@@ -57,13 +61,16 @@ function generateCisoActions(decision: UrgentDecision): CisoAction[] {
 /**
  * Tarjeta destacada que muestra la decisión urgente que requiere intervención.
  * En vista CISO, incluye botones de acción ejecutiva con feedback interactivo.
+ * Acepta un trigger externo (simDecisionTrigger) para ejecutar una acción
+ * programáticamente durante la simulación de tour guiado.
  * @param props - Props del componente
  * @returns Elemento JSX de la tarjeta de decisión
  */
-export function DecisionCard({ decision, activeRole }: DecisionCardProps) {
+export function DecisionCard({ decision, activeRole, simDecisionTrigger = null, onSimDecisionHandled }: DecisionCardProps) {
   const [actionState, setActionState] = useState<ActionState>('idle');
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [confirmedTime, setConfirmedTime] = useState<string | null>(null);
+  const prevTriggerRef = useRef<string | null>(null);
 
   const cisoActions = generateCisoActions(decision);
 
@@ -83,6 +90,20 @@ export function DecisionCard({ decision, activeRole }: DecisionCardProps) {
       setActionState('confirmed');
     }, 600);
   }, [actionState]);
+
+  // React to external simulation trigger for decision approval
+  useEffect(() => {
+    if (
+      simDecisionTrigger !== null &&
+      simDecisionTrigger !== prevTriggerRef.current &&
+      actionState === 'idle' &&
+      activeRole === 'ciso'
+    ) {
+      prevTriggerRef.current = simDecisionTrigger;
+      handleActionClick(simDecisionTrigger);
+      onSimDecisionHandled?.();
+    }
+  }, [simDecisionTrigger, actionState, activeRole, handleActionClick, onSimDecisionHandled]);
 
   return (
     <div className="decision-card" role="alert" aria-live="assertive">
