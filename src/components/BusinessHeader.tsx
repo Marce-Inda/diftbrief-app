@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import type { SeverityLevel, Regulation } from '../types/index';
 import { FinancialRiskModal } from './FinancialRiskModal';
 import { RegulatorySlaModal } from './RegulatorySlaModal';
+import { TriageEfficiencyModal } from './TriageEfficiencyModal';
 import './BusinessHeader.css';
 
 /**
@@ -93,9 +94,16 @@ export function BusinessHeader({
 }: BusinessHeaderProps): ReactElement {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
+  const [isTriageModalOpen, setIsTriageModalOpen] = useState<boolean>(false);
   const financialCardRef = useRef<HTMLDivElement>(null);
+  const triageCardRef = useRef<HTMLDivElement>(null);
 
   const isInteractive = financialExposureUsd != null;
+  const isTriageInteractive =
+    automatedTimeSeconds != null &&
+    automatedTimeSeconds > 0 &&
+    manualTimeSeconds != null &&
+    manualTimeSeconds > 0;
 
   /**
    * Cierra el modal financiero y devuelve el foco al card financiero.
@@ -110,6 +118,14 @@ export function BusinessHeader({
    */
   const handleRegulationModalClose = useCallback((): void => {
     setSelectedRegulation(null);
+  }, []);
+
+  /**
+   * Cierra el modal de triage y devuelve el foco al card de triage.
+   */
+  const handleTriageModalClose = useCallback((): void => {
+    setIsTriageModalOpen(false);
+    triageCardRef.current?.focus();
   }, []);
 
   /**
@@ -139,7 +155,20 @@ export function BusinessHeader({
     manualTimeSeconds <= 0
       ? null
       : (
-          <div className="business-header__metric business-header__triage">
+          <div
+            className={`business-header__metric business-header__triage${isTriageInteractive ? ' business-header__triage--interactive' : ''}`}
+            ref={triageCardRef}
+            role="button"
+            tabIndex={0}
+            aria-label="Ver detalle de eficiencia de triage MTTR"
+            onClick={() => setIsTriageModalOpen(true)}
+            onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setIsTriageModalOpen(true);
+              }
+            }}
+          >
             <span className="business-header__label">TIEMPO DE TRIAGE</span>
             <span className="business-header__value">
               ⏱️ <span className="business-header__automated">{formatTime(automatedTimeSeconds)}</span> vs {formatTime(manualTimeSeconds)} triage manual
@@ -215,6 +244,13 @@ export function BusinessHeader({
         <RegulatorySlaModal
           regulation={selectedRegulation}
           onClose={handleRegulationModalClose}
+        />
+      )}
+      {isTriageModalOpen && isTriageInteractive && (
+        <TriageEfficiencyModal
+          automatedTimeSeconds={automatedTimeSeconds as number}
+          manualTimeSeconds={manualTimeSeconds as number}
+          onClose={handleTriageModalClose}
         />
       )}
     </section>

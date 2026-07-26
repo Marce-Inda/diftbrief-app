@@ -176,3 +176,19 @@
   outline: 2px solid #FFD166;
   outline-offset: 2px;
 }
+
+/* Interactive Triage Card - Clickable State */
+.business-header__triage--interactive {
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.business-header__triage--interactive:hover {
+  box-shadow: 0 0 20px rgba(91, 192, 235, 0.35);
+  transform: translateY(-1px);
+}
+
+.business-header__triage--interactive:focus-visible {
+  outline: 2px solid var(--color-drift);
+  outline-offset: 2px;
+}
